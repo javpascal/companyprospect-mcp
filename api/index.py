@@ -7,152 +7,191 @@ API_URL = "https://api.nummary.co"
 API_KEY = "nm_92051a269374f2c79569b3e07231dbd5"
 API_USER = "bba3be65-fe5e-4ff9-9951-24a0cb2c912c"
 
-class handler(BaseHTTPRequestHandler):
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
-
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-Type', 'text/event-stream')
-        self.send_header('Cache-Control', 'no-cache')
-        self.send_header('Connection', 'keep-alive')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
+def handler(request, response):
+    """Vercel serverless function handler"""
+    
+    # Set CORS headers
+    response.headers = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Content-Type': 'application/json'
+    }
+    
+    # Handle OPTIONS for CORS
+    if request.method == 'OPTIONS':
+        response.status_code = 200
+        return ""
+    
+    # Handle GET for SSE handshake
+    if request.method == 'GET':
+        response.status_code = 200
+        response.headers['Content-Type'] = 'text/event-stream'
+        response.headers['Cache-Control'] = 'no-cache'
+        response.headers['Connection'] = 'keep-alive'
         
-        # Send endpoint event for MCP SSE
-        # Construct endpoint URL (assuming standard Vercel deployment)
-        # We can't easily get the full URL from self.path in this context without Host header
-        host = self.headers.get('Host', 'localhost')
+        host = request.headers.get('Host', 'localhost')
         proto = 'https' if 'localhost' not in host else 'http'
-        endpoint = f"{proto}://{host}/api/index.py" # Or just / if rewritten
+        # Assuming the function is served at /api/index.py or rewritten root
+        # We point the client to the same URL for POST requests
+        endpoint = f"{proto}://{host}{request.path}"
         
-        # Actually, for MCP SSE, we just need to point to the POST endpoint
-        # If we are at /sse, we point to /messages. 
-        # But here we are likely at / (rewritten).
-        # Let's assume the client POSTs to the same URL.
-        
-        data = f"event: endpoint\ndata: {proto}://{host}{self.path}\n\n"
-        self.wfile.write(data.encode('utf-8'))
-
-        
-    def do_POST(self):
-        content_length = int(self.headers['Content-Length'])
-        post_data = self.rfile.read(content_length)
-        data = json.loads(post_data.decode('utf-8'))
-        
-        method = data.get('method')
-        params = data.get('params', {})
-        request_id = data.get('id')
-        
-        # Handle initialize
-        if method == "initialize":
-            response = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {}, "prompts": {}},
-                    "serverInfo": {"name": "nummary-mcp", "version": "1.0.0"}
-                }
-            }
-        # Handle notifications/initialized
-        elif method == "notifications/initialized":
-            response = {"jsonrpc": "2.0", "id": request_id, "result": {}}
-        # Handle tools/list
-        elif method == "tools/list":
-            response = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "tools": [
-                        {
-                            "name": "company_typeahead",
-                            "description": "Busca empresas que coincidan con el query proporcionado",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "query": {"type": "string", "description": "Término de búsqueda"}
-                                },
-                                "required": ["query"]
-                            }
-                        },
-                        {
-                            "name": "find_competitors",
-                            "description": "Busca competidores basándose en una lista de empresas y palabras clave",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "context": {
-                                        "type": "array",
-                                        "description": "Lista de empresas y palabras clave",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "type": {"type": "string", "enum": ["company", "keyword"]},
-                                                "id": {"type": "integer"},
-                                                "text": {"type": "string"}
-                                            },
-                                            "required": ["type", "text"]
-                                        }
-                                    }
-                                },
-                                "required": ["context"]
-                            }
-                        }
-                    ]
-                }
-            }
-        # Handle prompts/list
-        elif method == "prompts/list":
-            response = {"jsonrpc": "2.0", "id": request_id, "result": {"prompts": []}}
-        # Handle tools/call
-        elif method == "tools/call":
-            tool_name = params.get("name")
-            args = params.get("arguments", {})
-            
-            if tool_name == "company_typeahead":
-                query = args.get("query", "")
-                result = call_nummary_api("/app/type/company", {"query": query.strip()})
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {
-                        "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
-                    }
-                }
-            elif tool_name == "find_competitors":
-                context = args.get("context", [])
-                result = call_nummary_api("/app/naturalsearch", {"context": context})
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {
-                        "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
-                    }
-                }
+        data = f"event: endpoint\ndata: {endpoint}\n\n"
+        return data
+    
+    # Handle POST for MCP RPC
+    if request.method == 'POST':
+        try:
+            # Vercel request.body is already parsed JSON if content-type is application/json
+            # But sometimes it's a string or bytes. Safer to handle both.
+            body = request.body
+            if isinstance(body, bytes):
+                body = body.decode('utf-8')
+            if isinstance(body, str):
+                data = json.loads(body)
             else:
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {"code": -32601, "message": f"Tool '{tool_name}' not found"}
+                data = body
+                
+            method = data.get('method')
+            params = data.get('params', {})
+            request_id = data.get('id')
+            
+            result = handle_method(method, params, request_id)
+            return json.dumps(result)
+            
+        except Exception as e:
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32603,
+                    "message": str(e)
                 }
-        else:
-            response = {
+            })
+    
+    # Method not allowed
+    response.status_code = 405
+    return json.dumps({"error": "Method not allowed"})
+
+def handle_method(method, params, request_id):
+    """Handle MCP methods"""
+    
+    # Initialize
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}, "prompts": {}},
+                "serverInfo": {"name": "nummary-mcp", "version": "1.0.0"}
+            }
+        }
+    
+    # Notifications/initialized
+    if method == "notifications/initialized":
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {}
+        }
+    
+    # Tools/list
+    if method == "tools/list":
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "tools": [
+                    {
+                        "name": "company_typeahead",
+                        "description": "Busca empresas que coincidan con el query proporcionado",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string", "description": "Término de búsqueda"}
+                            },
+                            "required": ["query"]
+                        }
+                    },
+                    {
+                        "name": "find_competitors",
+                        "description": "Busca competidores basándose en una lista de empresas y palabras clave",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "context": {
+                                    "type": "array",
+                                    "description": "Lista de empresas y palabras clave",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "type": {"type": "string", "enum": ["company", "keyword"]},
+                                            "id": {"type": "integer"},
+                                            "text": {"type": "string"}
+                                        },
+                                        "required": ["type", "text"]
+                                    }
+                                }
+                            },
+                            "required": ["context"]
+                        }
+                    }
+                ]
+            }
+        }
+    
+    # Prompts/list
+    if method == "prompts/list":
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "prompts": []
+            }
+        }
+    
+    # Tools/call
+    if method == "tools/call":
+        tool_name = params.get("name")
+        args = params.get("arguments", {})
+        
+        if tool_name == "company_typeahead":
+            query = args.get("query", "")
+            result = call_nummary_api("/app/type/company", {"query": query.strip()})
+            return {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "error": {"code": -32601, "message": f"Method '{method}' not found"}
+                "result": {
+                    "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
+                }
             }
-        
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        self.wfile.write(json.dumps(response).encode())
-        return
+        elif tool_name == "find_competitors":
+            context = args.get("context", [])
+            result = call_nummary_api("/app/naturalsearch", {"context": context})
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
+                }
+            }
+        else:
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32601, "message": f"Tool '{tool_name}' not found"}
+            }
+    
+    # Method not found
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": -32601,
+            "message": f"Method '{method}' not found"
+        }
+    }
 
 def call_nummary_api(endpoint, body):
     try:
