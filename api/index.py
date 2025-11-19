@@ -88,8 +88,10 @@ class handler(BaseHTTPRequestHandler):
         # Extract API Key from Authorization header if present
         auth_header = self.headers.get('Authorization')
         request_api_key = None
-        if auth_header and auth_header.startswith('Bearer '):
-            request_api_key = auth_header.split(' ')[1]
+        if auth_header:
+            parts = auth_header.split()
+            if len(parts) == 2 and parts[0].lower() == 'bearer':
+                request_api_key = parts[1]
 
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length)
@@ -210,9 +212,10 @@ def call_nummary_api(endpoint, body, request_key=None):
     
     # Check if API credentials are configured
     if not api_key:
+        debug_msg = " (Auth Header found)" if request_key else " (No Auth Header)"
         return {
             "error": "Configuration error",
-            "message": "API Key missing. Please provide it via OAuth Client Secret or configure API_KEY environment variable."
+            "message": f"API Key missing{debug_msg}. Please provide it via OAuth Client Secret or configure API_KEY environment variable."
         }
     
     try:
