@@ -2,28 +2,53 @@ from http.server import BaseHTTPRequestHandler
 import json
 import requests
 import os
+from urllib.parse import parse_qs
 
 # API configuration
 API_URL = os.environ.get("API_URL", "https://api.nummary.co")
-API_KEY = os.environ.get("API_KEY")
+FALLBACK_API_KEY = os.environ.get("API_KEY")  # Optional fallback
 
 class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = self.headers.get('Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', origin)
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.send_header('Access-Control-Allow-Credentials', 'true')
         self.end_headers()
     
     def do_GET(self):
+        # Handle OAuth authorize endpoint - auto-approve
+        if self.path.startswith('/authorize'):
+            # Extract redirect_uri and state from query params
+            query = self.path.split('?')[1] if '?' in self.path else ''
+            params = parse_qs(query)
+            redirect_uri = params.get('redirect_uri', [''])[0]
+            state = params.get('state', [''])[0]
+            
+            if redirect_uri:
+                # Immediately redirect back with a dummy code
+                sep = '&' if '?' in redirect_uri else '?'
+                location = f"{redirect_uri}{sep}code=dummy"
+                if state:
+                    location += f"&state={state}"
+                
+                self.send_response(302)
+                self.send_header('Location', location)
+                self.end_headers()
+                return
+        
+        # SSE endpoint
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.send_header('Cache-Control', 'no-cache')
         self.send_header('Connection', 'keep-alive')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = self.headers.get('Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', origin)
+        self.send_header('Access-Control-Allow-Credentials', 'true')
         self.end_headers()
         
-        # Send endpoint event for MCP SSE
         host = self.headers.get('Host', 'localhost')
         proto = 'https' if 'localhost' not in host else 'http'
         endpoint = f"{proto}://{host}{self.path}"
@@ -33,6 +58,57 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         
     def do_POST(self):
+        # Handle OAuth token endpoint
+        if self.path.startswith('/token'):
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            
+            # Parse both JSON and form-encoded data
+            content_type = self.headers.get('Content-Type', '')
+            client_secret = None
+            
+            if 'application/json' in content_type:
+                try:
+                    data = json.loads(post_data.decode('utf-8'))
+                    client_secret = data.get('client_secret')
+                except:
+                    pass
+            else:
+                # Form-encoded
+                params = parse_qs(post_data.decode('utf-8'))
+                client_secret = params.get('client_secret', [None])[0]
+            
+            # Return the client_secret as the access token
+            # This is where the user's API key comes through
+            response = {
+                "access_token": client_secret or "no_token",
+                "token_type": "Bearer",
+                "expires_in": 3600
+            }
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            origin = self.headers.get('Origin', '*')
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Access-Control-Allow-Credentials', 'true')
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode())
+            return
+        
+        # Handle MCP requests
+        # Extract API Key from Authorization header (passed via OAuth)
+        auth_header = self.headers.get('Authorization')
+        api_key = None
+        if auth_header and auth_header.startswith('Bearer '):
+            api_key = auth_header.replace('Bearer ', '').strip()
+            # Skip if it's a dummy token
+            if api_key == "no_token":
+                api_key = None
+        
+        # Fall back to environment variable if no API key provided
+        if not api_key:
+            api_key = FALLBACK_API_KEY
+        
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length)
         data = json.loads(post_data.decode('utf-8'))
@@ -109,7 +185,7 @@ class handler(BaseHTTPRequestHandler):
             
             if tool_name == "company_typeahead":
                 query = args.get("query", "")
-                result = call_nummary_api("/app/type/company", {"query": query.strip()})
+                result = call_nummary_api("/app/type/company", {"query": query.strip()}, api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -119,7 +195,7 @@ class handler(BaseHTTPRequestHandler):
                 }
             elif tool_name == "find_competitors":
                 context = args.get("context", [])
-                result = call_nummary_api("/app/naturalsearch", {"context": context})
+                result = call_nummary_api("/app/naturalsearch", {"context": context}, api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -142,29 +218,29 @@ class handler(BaseHTTPRequestHandler):
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = self.headers.get('Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', origin)
+        self.send_header('Access-Control-Allow-Credentials', 'true')
         self.end_headers()
         self.wfile.write(json.dumps(response).encode())
         return
 
-def call_nummary_api(endpoint, body):
-    # Check if API key is configured
-    if not API_KEY:
+def call_nummary_api(endpoint, body, api_key=None):
+    if not api_key:
         return {
-            "error": "Configuration required",
-            "message": "API_KEY environment variable is not configured. Please set it in Vercel project settings.",
+            "error": "Authentication required",
+            "message": "Please provide your Nummary API key in the OAuth Client Secret field when configuring the MCP connector.",
             "instructions": [
-                "1. Go to your Vercel dashboard",
-                "2. Navigate to Project Settings → Environment Variables",
-                "3. Add API_KEY with your Nummary API key",
-                "4. Redeploy the project"
+                "1. Get your API key from Nummary (after logging in, check the AUTH_APIKEY cookie)",
+                "2. In Claude's connector settings, enter it in 'OAuth Client Secret'",
+                "3. Leave 'OAuth Client ID' empty or enter any value"
             ]
         }
     
     try:
         url = f"{API_URL}{endpoint}"
         headers = {
-            "X-Api-Key": API_KEY,
+            "X-Api-Key": api_key,
             "Accept": "application/json",
             "Content-Type": "application/json"
         }
@@ -172,6 +248,10 @@ def call_nummary_api(endpoint, body):
         if response.ok:
             return response.json()
         else:
-            return {"error": f"API error: {response.status_code}", "message": response.text}
+            return {
+                "error": f"API error: {response.status_code}",
+                "message": response.text,
+                "hint": "Check if your API key is valid"
+            }
     except Exception as e:
         return {"error": "API call failed", "message": str(e)}
