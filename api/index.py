@@ -14,6 +14,7 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.send_header('Access-Control-Allow-Credentials', 'true')
         self.end_headers()
     
     def do_GET(self):
@@ -81,6 +82,7 @@ class handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Credentials', 'true')
             self.end_headers()
             self.wfile.write(json.dumps(response).encode())
             return
@@ -166,9 +168,13 @@ class handler(BaseHTTPRequestHandler):
         elif method == "tools/call":
             tool_name = params.get("name")
             args = params.get("arguments", {})
+            
+            # Pass all headers for debugging if needed
+            debug_headers = dict(self.headers)
+            
             if tool_name == "company_typeahead":
                 query = args.get("query", "")
-                result = call_nummary_api("/app/type/company", {"query": query.strip()}, request_api_key)
+                result = call_nummary_api("/app/type/company", {"query": query.strip()}, request_api_key, debug_headers)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -178,7 +184,7 @@ class handler(BaseHTTPRequestHandler):
                 }
             elif tool_name == "find_competitors":
                 context = args.get("context", [])
-                result = call_nummary_api("/app/naturalsearch", {"context": context}, request_api_key)
+                result = call_nummary_api("/app/naturalsearch", {"context": context}, request_api_key, debug_headers)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -202,20 +208,22 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Credentials', 'true')
         self.end_headers()
         self.wfile.write(json.dumps(response).encode())
         return
 
-def call_nummary_api(endpoint, body, request_key=None):
+def call_nummary_api(endpoint, body, request_key=None, debug_headers=None):
     # Use request key if provided (from OAuth), otherwise fallback to env var
     api_key = request_key or API_KEY
     
     # Check if API credentials are configured
     if not api_key:
         debug_msg = " (Auth Header found)" if request_key else " (No Auth Header)"
+        headers_dump = f" Headers received: {list(debug_headers.keys())}" if debug_headers else ""
         return {
             "error": "Configuration error",
-            "message": f"API Key missing{debug_msg}. Please provide it via OAuth Client Secret or configure API_KEY environment variable."
+            "message": f"API Key missing{debug_msg}.{headers_dump} Please provide it via OAuth Client Secret or configure API_KEY environment variable."
         }
     
     try:
