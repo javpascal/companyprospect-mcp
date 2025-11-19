@@ -20,17 +20,43 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Credentials', 'true')
         self.end_headers()
     
-    def do_GET(self):
-        parsed_url = urlparse(self.path)
+    def extract_api_key_from_path(self, path):
+        """Extract API key if embedded in path like /key/nm_xxx/... or /nm_xxx/..."""
+        parts = path.strip('/').split('/')
         
-        # Extract API key from query parameters if present
+        # Check if path starts with /key/API_KEY/...
+        if len(parts) >= 2 and parts[0] == 'key':
+            api_key = parts[1]
+            if api_key.startswith('nm_'):
+                remaining_path = '/' + '/'.join(parts[2:]) if len(parts) > 2 else '/'
+                print(f"[DEBUG] Found API key in path: /key/{api_key[:8]}***", file=sys.stderr)
+                return api_key, remaining_path
+        
+        # Check if path starts with /API_KEY/... (where API_KEY starts with nm_)
+        if len(parts) >= 1 and parts[0].startswith('nm_'):
+            api_key = parts[0]
+            remaining_path = '/' + '/'.join(parts[1:]) if len(parts) > 1 else '/'
+            print(f"[DEBUG] Found API key in path: /{api_key[:8]}***", file=sys.stderr)
+            return api_key, remaining_path
+        
+        return None, path
+    
+    def do_GET(self):
+        # Extract API key from path
+        api_key_from_path, clean_path = self.extract_api_key_from_path(self.path)
+        
+        # Also check query parameters as backup
+        parsed_url = urlparse(self.path)
         query_params = parse_qs(parsed_url.query)
         api_key_from_query = query_params.get('api_key', [None])[0]
         
-        if api_key_from_query:
-            print(f"[DEBUG] GET request has api_key in query: {api_key_from_query[:8]}...", file=sys.stderr)
+        # Use path API key first, then query param
+        api_key = api_key_from_path or api_key_from_query
         
-        # SSE endpoint - IMPORTANT: preserve API key in the endpoint URL
+        if api_key:
+            print(f"[DEBUG] GET request has API key: {api_key[:8]}***", file=sys.stderr)
+        
+        # SSE endpoint
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.send_header('Cache-Control', 'no-cache')
@@ -38,85 +64,80 @@ class handler(BaseHTTPRequestHandler):
         origin = self.headers.get('Origin', '*')
         self.send_header('Access-Control-Allow-Origin', origin)
         self.send_header('Access-Control-Allow-Credentials', 'true')
-        # Set API key as a custom header that will be echoed back
-        if api_key_from_query:
-            self.send_header('X-Api-Key', api_key_from_query)
         self.end_headers()
         
         host = self.headers.get('Host', 'localhost')
         proto = 'https' if 'localhost' not in host else 'http'
         
-        # CRITICAL: Include the API key in the SSE endpoint data
-        # This ensures subsequent POST requests know about the API key
-        if api_key_from_query:
+        # CRITICAL: Preserve the API key in the endpoint URL
+        if api_key_from_path:
+            # Keep the API key in the path for subsequent requests
+            endpoint = f"{proto}://{host}{self.path}"
+        elif api_key_from_query:
             endpoint = f"{proto}://{host}{parsed_url.path}?api_key={api_key_from_query}"
         else:
-            endpoint = f"{proto}://{host}{parsed_url.path}"
+            endpoint = f"{proto}://{host}{self.path}"
         
         # Send endpoint with API key preserved
         data = f"event: endpoint\ndata: {endpoint}\n\n"
         
-        # Also send API key as a separate event for clients that can handle it
-        if api_key_from_query:
-            data += f"event: auth\ndata: {api_key_from_query}\n\n"
+        # Also send API key as a separate event
+        if api_key:
+            data += f"event: auth\ndata: {api_key}\n\n"
         
         self.wfile.write(data.encode('utf-8'))
         self.wfile.flush()
         
     def do_POST(self):
-        # Debug logging
-        print(f"[DEBUG] POST request to: {self.path}", file=sys.stderr)
-        print(f"[DEBUG] Headers: {dict(self.headers)}", file=sys.stderr)
+        original_path = self.path
         
-        # Extract API key from multiple possible sources
-        api_key = None
+        # Extract API key from path FIRST
+        api_key_from_path, clean_path = self.extract_api_key_from_path(self.path)
+        api_key = api_key_from_path
         
-        # 1. Check URL query parameters FIRST (most reliable for our use case)
-        if '?' in self.path:
-            query_params = parse_qs(self.path.split('?')[1])
-            api_key = query_params.get('api_key', [None])[0]
-            if api_key:
-                print(f"[DEBUG] Found API key in URL query params", file=sys.stderr)
+        if api_key:
+            print(f"[DEBUG] POST: Found API key in path", file=sys.stderr)
         
-        # 2. Check Referer header for API key (SSE connections might have it here)
+        # If no API key in path, try other sources
+        if not api_key:
+            # Check URL query parameters
+            if '?' in self.path:
+                query_params = parse_qs(self.path.split('?')[1])
+                api_key = query_params.get('api_key', [None])[0]
+                if api_key:
+                    print(f"[DEBUG] POST: Found API key in query params", file=sys.stderr)
+        
+        # Check Referer header for API key
         if not api_key:
             referer = self.headers.get('Referer', '')
-            if 'api_key=' in referer:
+            # Check if API key is in the referer path
+            if referer:
                 parsed_referer = urlparse(referer)
-                referer_params = parse_qs(parsed_referer.query)
-                api_key = referer_params.get('api_key', [None])[0]
-                if api_key:
-                    print(f"[DEBUG] Found API key in Referer header", file=sys.stderr)
+                api_key_from_referer_path, _ = self.extract_api_key_from_path(parsed_referer.path)
+                if api_key_from_referer_path:
+                    api_key = api_key_from_referer_path
+                    print(f"[DEBUG] POST: Found API key in Referer path", file=sys.stderr)
+                elif 'api_key=' in referer:
+                    referer_params = parse_qs(parsed_referer.query)
+                    api_key = referer_params.get('api_key', [None])[0]
+                    if api_key:
+                        print(f"[DEBUG] POST: Found API key in Referer query", file=sys.stderr)
         
-        # 3. Check custom X-Api-Key header
+        # Check custom X-Api-Key header
         if not api_key:
             api_key = self.headers.get('X-Api-Key')
             if api_key:
-                print(f"[DEBUG] Found API key in X-Api-Key header", file=sys.stderr)
+                print(f"[DEBUG] POST: Found API key in X-Api-Key header", file=sys.stderr)
         
-        # 4. Check Authorization header (Bearer token)
+        # Check Authorization header
         if not api_key:
             auth_header = self.headers.get('Authorization', '')
-            if auth_header.startswith('Bearer '):
+            if auth_header.startswith('Bearer ') and auth_header[7:] != 'no_token':
                 api_key = auth_header[7:].strip()
-                if api_key and api_key != "no_token":
-                    print(f"[DEBUG] Found API key in Bearer token", file=sys.stderr)
-                else:
-                    api_key = None
+                if api_key:
+                    print(f"[DEBUG] POST: Found API key in Bearer token", file=sys.stderr)
         
-        # 5. Check Authorization header (Basic auth)
-        if not api_key and auth_header.startswith('Basic '):
-            try:
-                decoded = base64.b64decode(auth_header[6:]).decode('utf-8')
-                if ':' in decoded:
-                    _, api_key = decoded.split(':', 1)
-                    print(f"[DEBUG] Found API key in Basic auth", file=sys.stderr)
-                else:
-                    api_key = decoded
-            except:
-                pass
-        
-        # 6. Parse request body
+        # Parse request body
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = self.rfile.read(content_length)
         
@@ -126,21 +147,21 @@ class handler(BaseHTTPRequestHandler):
             print(f"[DEBUG] Failed to parse JSON body", file=sys.stderr)
             data = {}
         
-        # 7. Check if API key is embedded in the request params
+        # Check if API key is embedded in request params
         if not api_key and isinstance(data.get('params'), dict):
             api_key = data['params'].pop('api_key', None)
             if api_key:
-                print(f"[DEBUG] Found API key in request params", file=sys.stderr)
+                print(f"[DEBUG] POST: Found API key in request params", file=sys.stderr)
         
-        # 8. Fall back to environment variable
+        # Fall back to environment variable
         if not api_key:
             api_key = FALLBACK_API_KEY
             if api_key:
-                print(f"[DEBUG] Using fallback API key from environment", file=sys.stderr)
+                print(f"[DEBUG] POST: Using fallback API key from environment", file=sys.stderr)
             else:
-                print(f"[DEBUG] NO API KEY FOUND ANYWHERE!", file=sys.stderr)
-                print(f"[DEBUG] Path: {self.path}", file=sys.stderr)
-                print(f"[DEBUG] Referer: {self.headers.get('Referer', 'None')}", file=sys.stderr)
+                print(f"[DEBUG] POST: NO API KEY FOUND!", file=sys.stderr)
+                print(f"[DEBUG] POST: Original path: {original_path}", file=sys.stderr)
+                print(f"[DEBUG] POST: Referer: {self.headers.get('Referer', 'None')}", file=sys.stderr)
         
         method = data.get('method')
         params = data.get('params', {})
@@ -262,17 +283,14 @@ def call_nummary_api(endpoint, body, api_key=None):
     if not api_key:
         return {
             "error": "Authentication required",
-            "message": "API key not found. Check Vercel logs for [DEBUG] messages.",
-            "troubleshooting": [
-                "1. Make sure your Claude config URL includes ?api_key=YOUR_KEY",
-                "2. Check Vercel function logs for debug output",
-                "3. Try setting API_KEY in Vercel environment variables as fallback"
+            "message": "API key not found. For Claude Desktop, use the path-based format.",
+            "instructions": [
+                "Configure Claude Desktop with your API key in the URL path:",
+                "https://companyprospect-mcp.vercel.app/nm_9xxxxx",
+                "or",
+                "https://companyprospect-mcp.vercel.app/key/nm_9xxxxx"
             ],
-            "claude_config": {
-                "correct_format": {
-                    "url": "https://companyprospect-mcp.vercel.app?api_key=nm_9xxxxx"
-                }
-            }
+            "troubleshooting": "Check Vercel logs for [DEBUG] messages to see what's being received"
         }
     
     try:
