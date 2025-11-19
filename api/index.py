@@ -16,6 +16,16 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        # Health check for root path
+        if self.path == '/' or self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(b"Nummary MCP Server is running")
+            return
+
+        # SSE Handshake
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.send_header('Cache-Control', 'no-cache')
@@ -26,7 +36,9 @@ class handler(BaseHTTPRequestHandler):
         # Send endpoint event for MCP SSE
         host = self.headers.get('Host', 'localhost')
         proto = 'https' if 'localhost' not in host else 'http'
-        endpoint = f"{proto}://{host}{self.path}"
+        
+        # Force the endpoint to be /messages to avoid ambiguity
+        endpoint = f"{proto}://{host}/messages"
         
         data = f"event: endpoint\ndata: {endpoint}\n\n"
         self.wfile.write(data.encode('utf-8'))
