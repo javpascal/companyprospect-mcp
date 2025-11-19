@@ -11,7 +11,8 @@ API_KEY = os.environ.get("API_KEY")
 class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = self.headers.get('Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', origin)
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         self.send_header('Access-Control-Allow-Credentials', 'true')
@@ -42,7 +43,9 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'text/event-stream')
         self.send_header('Cache-Control', 'no-cache')
         self.send_header('Connection', 'keep-alive')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = self.headers.get('Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', origin)
+        self.send_header('Access-Control-Allow-Credentials', 'true')
         self.end_headers()
         
         # Send endpoint event for MCP SSE
@@ -76,12 +79,15 @@ class handler(BaseHTTPRequestHandler):
             response = {
                 "access_token": client_secret,
                 "token_type": "Bearer",
-                "expires_in": 3600
+                "expires_in": 3600,
+                "scope": "default",
+                "refresh_token": client_secret
             }
             
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            origin = self.headers.get('Origin', '*')
+            self.send_header('Access-Control-Allow-Origin', origin)
             self.send_header('Access-Control-Allow-Credentials', 'true')
             self.end_headers()
             self.wfile.write(json.dumps(response).encode())
@@ -207,7 +213,8 @@ class handler(BaseHTTPRequestHandler):
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = self.headers.get('Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', origin)
         self.send_header('Access-Control-Allow-Credentials', 'true')
         self.end_headers()
         self.wfile.write(json.dumps(response).encode())
