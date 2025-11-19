@@ -3,6 +3,11 @@ import json
 import requests
 import os
 from urllib.parse import urlparse, parse_qs
+import logging
+
+# Set up logging for debugging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # API configuration
 API_URL = os.environ.get("API_URL", "https://api.nummary.co")
@@ -19,6 +24,37 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
     
     def do_GET(self):
+        # Handle health check endpoint
+        if self.path == '/health' or self.path == '/':
+            auth_header = self.headers.get('Authorization')
+            has_auth = bool(auth_header and 'bearer' in auth_header.lower())
+            has_env_key = bool(API_KEY)
+            
+            status = {
+                "status": "healthy",
+                "server": "nummary-mcp",
+                "version": "1.0.0",
+                "authentication": {
+                    "oauth_token_present": has_auth,
+                    "env_api_key_present": has_env_key,
+                    "ready": has_auth or has_env_key
+                },
+                "endpoints": {
+                    "oauth_authorize": "/authorize",
+                    "oauth_token": "/token",
+                    "mcp": "/mcp"
+                }
+            }
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            origin = self.headers.get('Origin', '*')
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Access-Control-Allow-Credentials', 'true')
+            self.end_headers()
+            self.wfile.write(json.dumps(status, indent=2).encode())
+            return
+        
         # Handle OAuth authorize endpoint
         if self.path.startswith('/authorize'):
             query = urlparse(self.path).query
@@ -27,15 +63,23 @@ class handler(BaseHTTPRequestHandler):
             redirect_uri = params.get('redirect_uri', [None])[0]
             state = params.get('state', [None])[0]
             
+            logger.info(f"OAuth authorize request - redirect_uri: {redirect_uri}, state: {state}")
+            
             if redirect_uri:
-                # Auto-approve and redirect with a dummy code
+                # Auto-approve and redirect with authorization code
+                from urllib.parse import quote
                 sep = '&' if '?' in redirect_uri else '?'
-                target = f"{redirect_uri}{sep}code=auth_code"
+                # Use a fixed code that the token endpoint will accept
+                target = f"{redirect_uri}{sep}code=authorized"
                 if state:
-                    target += f"&state={state}"
+                    # Properly encode the state parameter
+                    target += f"&state={quote(state)}"
+                
+                logger.info(f"Redirecting to: {target}")
                 
                 self.send_response(302)
                 self.send_header('Location', target)
+                self.send_header('Cache-Control', 'no-store')
                 self.end_headers()
                 return
 
@@ -63,16 +107,39 @@ class handler(BaseHTTPRequestHandler):
             content_length = int(self.headers.get('Content-Length', 0))
             post_data = self.rfile.read(content_length)
             
-            # Parse form data
-            params = parse_qs(post_data.decode('utf-8'))
+            # Log the incoming request for debugging
+            logger.debug(f"Token endpoint called with headers: {dict(self.headers)}")
+            logger.debug(f"Token endpoint body: {post_data}")
             
-            # Extract client_secret (which is the API Key)
-            client_secret = params.get('client_secret', [None])[0]
+            # Parse data based on content type
+            content_type = self.headers.get('Content-Type', '')
+            client_secret = None
+            
+            if 'application/json' in content_type:
+                try:
+                    json_data = json.loads(post_data.decode('utf-8'))
+                    client_secret = json_data.get('client_secret')
+                    logger.debug(f"Parsed JSON, client_secret found: {bool(client_secret)}")
+                except json.JSONDecodeError:
+                    logger.error("Failed to parse JSON body")
+            else:
+                # Assume form-encoded data
+                params = parse_qs(post_data.decode('utf-8'))
+                client_secret = params.get('client_secret', [None])[0]
+                logger.debug(f"Parsed form data, client_secret found: {bool(client_secret)}")
             
             if not client_secret:
+                logger.error("Missing client_secret in token request")
                 self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                origin = self.headers.get('Origin', '*')
+                self.send_header('Access-Control-Allow-Origin', origin)
+                self.send_header('Access-Control-Allow-Credentials', 'true')
                 self.end_headers()
-                self.wfile.write(b'{"error": "invalid_request", "error_description": "Missing client_secret"}')
+                self.wfile.write(json.dumps({
+                    "error": "invalid_request", 
+                    "error_description": "Missing client_secret"
+                }).encode())
                 return
 
             # Return it as access_token
@@ -83,6 +150,8 @@ class handler(BaseHTTPRequestHandler):
                 "scope": "default",
                 "refresh_token": client_secret
             }
+            
+            logger.info(f"Token issued successfully")
             
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
@@ -100,6 +169,9 @@ class handler(BaseHTTPRequestHandler):
             parts = auth_header.split()
             if len(parts) == 2 and parts[0].lower() == 'bearer':
                 request_api_key = parts[1]
+                logger.debug(f"Bearer token found in Authorization header")
+        else:
+            logger.debug(f"No Authorization header found in MCP request")
 
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length)
@@ -108,6 +180,8 @@ class handler(BaseHTTPRequestHandler):
         method = data.get('method')
         params = data.get('params', {})
         request_id = data.get('id')
+        
+        logger.info(f"MCP method called: {method}")
         
         # Handle initialize
         if method == "initialize":
@@ -224,14 +298,28 @@ def call_nummary_api(endpoint, body, request_key=None, debug_headers=None):
     # Use request key if provided (from OAuth), otherwise fallback to env var
     api_key = request_key or API_KEY
     
+    logger.debug(f"API call to {endpoint}, OAuth key present: {bool(request_key)}, Env key present: {bool(API_KEY)}")
+    
     # Check if API credentials are configured
     if not api_key:
-        debug_msg = " (Auth Header found)" if request_key else " (No Auth Header)"
-        headers_dump = f" Headers received: {list(debug_headers.keys())}" if debug_headers else ""
-        return {
-            "error": "Configuration error",
-            "message": f"API Key missing{debug_msg}.{headers_dump} Please provide it via OAuth Client Secret or configure API_KEY environment variable."
+        error_details = []
+        if not request_key:
+            error_details.append("No OAuth token in Authorization header")
+        if not API_KEY:
+            error_details.append("No API_KEY environment variable configured")
+        
+        error_message = {
+            "error": "Authentication Required",
+            "message": "API Key is missing. Please provide it via OAuth Client Secret when configuring the MCP connector in Claude.",
+            "details": error_details,
+            "instructions": [
+                "1. In Claude's MCP connector dialog, enter your API key in the 'OAuth Client Secret' field",
+                "2. Leave the 'OAuth Client ID' field empty or enter any value",
+                "3. The API key will be passed securely through the OAuth flow"
+            ]
         }
+        logger.error(f"API authentication failed: {error_details}")
+        return error_message
     
     try:
         url = f"{API_URL}{endpoint}"
@@ -240,10 +328,20 @@ def call_nummary_api(endpoint, body, request_key=None, debug_headers=None):
             "Accept": "application/json",
             "Content-Type": "application/json"
         }
+        logger.info(f"Calling Nummary API: {url}")
         response = requests.post(url, headers=headers, json=body)
+        
         if response.ok:
+            logger.info(f"API call successful: {response.status_code}")
             return response.json()
         else:
-            return {"error": f"API error: {response.status_code}", "message": response.text}
+            logger.error(f"API call failed: {response.status_code} - {response.text}")
+            return {
+                "error": f"API Error {response.status_code}",
+                "message": response.text,
+                "endpoint": endpoint
+            }
     except Exception as e:
-        return {"error": "API call failed", "message": str(e)}
+        logger.error(f"API call exception: {str(e)}")
+        return {"error": "API call failed", "message": str(e), "endpoint": endpoint}
+
