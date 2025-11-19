@@ -2,6 +2,7 @@ from http.server import BaseHTTPRequestHandler
 import json
 import requests
 import os
+from urllib.parse import urlparse, parse_qs
 
 # API configuration
 API_URL = os.environ.get("API_URL", "https://api.nummary.co")
@@ -12,10 +13,30 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         self.end_headers()
     
     def do_GET(self):
+        # Handle OAuth authorize endpoint
+        if self.path.startswith('/authorize'):
+            query = urlparse(self.path).query
+            params = parse_qs(query)
+            
+            redirect_uri = params.get('redirect_uri', [None])[0]
+            state = params.get('state', [None])[0]
+            
+            if redirect_uri:
+                # Auto-approve and redirect with a dummy code
+                sep = '&' if '?' in redirect_uri else '?'
+                target = f"{redirect_uri}{sep}code=auth_code"
+                if state:
+                    target += f"&state={state}"
+                
+                self.send_response(302)
+                self.send_header('Location', target)
+                self.end_headers()
+                return
+
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.send_header('Cache-Control', 'no-cache')
@@ -33,6 +54,43 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         
     def do_POST(self):
+        # Handle OAuth token endpoint
+        if self.path.startswith('/token'):
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            
+            # Parse form data
+            params = parse_qs(post_data.decode('utf-8'))
+            
+            # Extract client_secret (which is the API Key)
+            client_secret = params.get('client_secret', [None])[0]
+            
+            if not client_secret:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b'{"error": "invalid_request", "error_description": "Missing client_secret"}')
+                return
+
+            # Return it as access_token
+            response = {
+                "access_token": client_secret,
+                "token_type": "Bearer",
+                "expires_in": 3600
+            }
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode())
+            return
+
+        # Extract API Key from Authorization header if present
+        auth_header = self.headers.get('Authorization')
+        request_api_key = None
+        if auth_header and auth_header.startswith('Bearer '):
+            request_api_key = auth_header.split(' ')[1]
+
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length)
         data = json.loads(post_data.decode('utf-8'))
@@ -108,7 +166,7 @@ class handler(BaseHTTPRequestHandler):
             args = params.get("arguments", {})
             if tool_name == "company_typeahead":
                 query = args.get("query", "")
-                result = call_nummary_api("/app/type/company", {"query": query.strip()})
+                result = call_nummary_api("/app/type/company", {"query": query.strip()}, request_api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -118,7 +176,7 @@ class handler(BaseHTTPRequestHandler):
                 }
             elif tool_name == "find_competitors":
                 context = args.get("context", [])
-                result = call_nummary_api("/app/naturalsearch", {"context": context})
+                result = call_nummary_api("/app/naturalsearch", {"context": context}, request_api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -146,18 +204,21 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(response).encode())
         return
 
-def call_nummary_api(endpoint, body):
+def call_nummary_api(endpoint, body, request_key=None):
+    # Use request key if provided (from OAuth), otherwise fallback to env var
+    api_key = request_key or API_KEY
+    
     # Check if API credentials are configured
-    if not API_KEY:
+    if not api_key:
         return {
             "error": "Configuration error",
-            "message": "API_KEY environment variable must be set. Please configure it in your Vercel project settings."
+            "message": "API Key missing. Please provide it via OAuth Client Secret or configure API_KEY environment variable."
         }
     
     try:
         url = f"{API_URL}{endpoint}"
         headers = {
-            "X-Api-Key": API_KEY,
+            "X-Api-Key": api_key,
             "Accept": "application/json",
             "Content-Type": "application/json"
         }
