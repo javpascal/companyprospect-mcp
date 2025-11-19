@@ -14,6 +14,23 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
+    
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Connection', 'keep-alive')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        
+        # Send endpoint event for MCP SSE
+        host = self.headers.get('Host', 'localhost')
+        proto = 'https' if 'localhost' not in host else 'http'
+        endpoint = f"{proto}://{host}{self.path}"
+        
+        data = f"event: endpoint\ndata: {endpoint}\n\n"
+        self.wfile.write(data.encode('utf-8'))
+        self.wfile.flush()
         
     def do_POST(self):
         content_length = int(self.headers['Content-Length'])
