@@ -2,8 +2,8 @@ from http.server import BaseHTTPRequestHandler
 import json
 import requests
 import os
-from urllib.parse import parse_qs
-import sys
+from urllib.parse import parse_qs, urlparse
+import base64
 
 # API configuration
 API_URL = os.environ.get("API_URL", "https://api.nummary.co")
@@ -15,34 +15,18 @@ class handler(BaseHTTPRequestHandler):
         origin = self.headers.get('Origin', '*')
         self.send_header('Access-Control-Allow-Origin', origin)
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Api-Key')
         self.send_header('Access-Control-Allow-Credentials', 'true')
         self.end_headers()
     
     def do_GET(self):
-        # Handle OAuth authorize endpoint - auto-approve
-        if self.path.startswith('/authorize'):
-            print(f"[DEBUG] Authorize called: {self.path}", file=sys.stderr)
-            # Extract redirect_uri and state from query params
-            query = self.path.split('?')[1] if '?' in self.path else ''
-            params = parse_qs(query)
-            redirect_uri = params.get('redirect_uri', [''])[0]
-            state = params.get('state', [''])[0]
-            
-            if redirect_uri:
-                # Immediately redirect back with a dummy code
-                sep = '&' if '?' in redirect_uri else '?'
-                location = f"{redirect_uri}{sep}code=dummy"
-                if state:
-                    location += f"&state={state}"
-                
-                print(f"[DEBUG] Redirecting to: {location}", file=sys.stderr)
-                self.send_response(302)
-                self.send_header('Location', location)
-                self.end_headers()
-                return
+        parsed_url = urlparse(self.path)
         
-        # SSE endpoint
+        # Extract API key from query parameters if present
+        query_params = parse_qs(parsed_url.query)
+        api_key_from_query = query_params.get('api_key', [None])[0]
+        
+        # SSE endpoint with API key support
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.send_header('Cache-Control', 'no-cache')
@@ -54,102 +38,74 @@ class handler(BaseHTTPRequestHandler):
         
         host = self.headers.get('Host', 'localhost')
         proto = 'https' if 'localhost' not in host else 'http'
-        endpoint = f"{proto}://{host}{self.path}"
+        
+        # Include API key in the endpoint if provided via query
+        if api_key_from_query:
+            # Pass it through in the SSE endpoint URL
+            endpoint = f"{proto}://{host}{parsed_url.path}?api_key={api_key_from_query}"
+        else:
+            endpoint = f"{proto}://{host}{parsed_url.path}"
         
         data = f"event: endpoint\ndata: {endpoint}\n\n"
         self.wfile.write(data.encode('utf-8'))
         self.wfile.flush()
         
     def do_POST(self):
-        # Handle OAuth token endpoint
-        if self.path.startswith('/token'):
-            print(f"[DEBUG] Token endpoint called", file=sys.stderr)
-            content_length = int(self.headers.get('Content-Length', 0))
-            post_data = self.rfile.read(content_length)
-            print(f"[DEBUG] Token request body: {post_data.decode('utf-8')[:200]}", file=sys.stderr)
-            
-            # Parse both JSON and form-encoded data
-            content_type = self.headers.get('Content-Type', '')
-            client_secret = None
-            
-            if 'application/json' in content_type:
-                try:
-                    data = json.loads(post_data.decode('utf-8'))
-                    client_secret = data.get('client_secret')
-                    print(f"[DEBUG] JSON client_secret found: {bool(client_secret)}", file=sys.stderr)
-                except:
-                    pass
-            else:
-                # Form-encoded
-                params = parse_qs(post_data.decode('utf-8'))
-                client_secret = params.get('client_secret', [None])[0]
-                print(f"[DEBUG] Form client_secret found: {bool(client_secret)}", file=sys.stderr)
-            
-            # Return the client_secret as the access token
-            # This is where the user's API key comes through
-            response = {
-                "access_token": client_secret or "no_token",
-                "token_type": "Bearer",
-                "expires_in": 3600
-            }
-            
-            print(f"[DEBUG] Returning access_token: {bool(client_secret)}", file=sys.stderr)
-            
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            origin = self.headers.get('Origin', '*')
-            self.send_header('Access-Control-Allow-Origin', origin)
-            self.send_header('Access-Control-Allow-Credentials', 'true')
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode())
-            return
-        
-        # Handle MCP requests
-        # Log all headers for debugging
-        print(f"[DEBUG] MCP Request Headers:", file=sys.stderr)
-        for header, value in self.headers.items():
-            if header.lower() == 'authorization':
-                # Mask the token for security
-                if value.startswith('Bearer '):
-                    token = value[7:]
-                    masked = f"Bearer {token[:4]}...{token[-4:]}" if len(token) > 8 else f"Bearer {token}"
-                    print(f"[DEBUG]   {header}: {masked}", file=sys.stderr)
-                else:
-                    print(f"[DEBUG]   {header}: {value}", file=sys.stderr)
-            else:
-                print(f"[DEBUG]   {header}: {value}", file=sys.stderr)
-        
-        # Extract API Key from Authorization header (passed via OAuth)
-        auth_header = self.headers.get('Authorization')
+        # Extract API key from multiple possible sources
         api_key = None
-        if auth_header and auth_header.startswith('Bearer '):
-            api_key = auth_header.replace('Bearer ', '').strip()
-            # Skip if it's a dummy token
-            if api_key == "no_token":
-                print(f"[DEBUG] No valid token found in Authorization header", file=sys.stderr)
+        
+        # 1. Check Authorization header (Bearer token)
+        auth_header = self.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            api_key = auth_header[7:].strip()
+            if api_key == "no_token" or not api_key:
                 api_key = None
-            else:
-                print(f"[DEBUG] Found API key in Authorization header", file=sys.stderr)
-        else:
-            print(f"[DEBUG] No Authorization header or not Bearer type", file=sys.stderr)
         
-        # Fall back to environment variable if no API key provided
+        # 2. Check Authorization header (Basic auth)
+        elif auth_header.startswith('Basic '):
+            try:
+                decoded = base64.b64decode(auth_header[6:]).decode('utf-8')
+                # Format is typically username:password, we use the password as API key
+                if ':' in decoded:
+                    _, api_key = decoded.split(':', 1)
+                else:
+                    api_key = decoded
+            except:
+                pass
+        
+        # 3. Check custom X-Api-Key header
         if not api_key:
-            api_key = FALLBACK_API_KEY
-            if api_key:
-                print(f"[DEBUG] Using fallback API key from environment", file=sys.stderr)
-            else:
-                print(f"[DEBUG] No API key available (no auth header, no env var)", file=sys.stderr)
+            api_key = self.headers.get('X-Api-Key')
         
-        content_length = int(self.headers['Content-Length'])
+        # 4. Check URL query parameters
+        if not api_key and '?' in self.path:
+            query_params = parse_qs(self.path.split('?')[1])
+            api_key = query_params.get('api_key', [None])[0]
+        
+        # 5. Parse request body for embedded API key
+        content_length = int(self.headers.get('Content-Length', 0))
         post_data = self.rfile.read(content_length)
         data = json.loads(post_data.decode('utf-8'))
+        
+        # Check if API key is embedded in the request
+        if not api_key and isinstance(data.get('params'), dict):
+            api_key = data['params'].pop('api_key', None)
+        
+        # 6. Fall back to environment variable
+        if not api_key:
+            api_key = FALLBACK_API_KEY
         
         method = data.get('method')
         params = data.get('params', {})
         request_id = data.get('id')
         
-        print(f"[DEBUG] MCP method: {method}", file=sys.stderr)
+        # Log for debugging
+        import sys
+        print(f"[DEBUG] Method: {method}, Has API Key: {bool(api_key)}", file=sys.stderr)
+        if not api_key:
+            print(f"[DEBUG] Auth header: {auth_header[:20] if auth_header else 'None'}", file=sys.stderr)
+            print(f"[DEBUG] X-Api-Key header: {self.headers.get('X-Api-Key', 'None')}", file=sys.stderr)
+            print(f"[DEBUG] Query params: {self.path if '?' in self.path else 'None'}", file=sys.stderr)
         
         # Handle initialize
         if method == "initialize":
@@ -217,8 +173,6 @@ class handler(BaseHTTPRequestHandler):
             tool_name = params.get("name")
             args = params.get("arguments", {})
             
-            print(f"[DEBUG] Tool call: {tool_name}, has API key: {bool(api_key)}", file=sys.stderr)
-            
             if tool_name == "company_typeahead":
                 query = args.get("query", "")
                 result = call_nummary_api("/app/type/company", {"query": query.strip()}, api_key)
@@ -265,13 +219,29 @@ def call_nummary_api(endpoint, body, api_key=None):
     if not api_key:
         return {
             "error": "Authentication required",
-            "message": "Please provide your Nummary API key in the OAuth Client Secret field when configuring the MCP connector.",
-            "instructions": [
-                "1. Get your API key from Nummary (after logging in, check the AUTH_APIKEY cookie)",
-                "2. In Claude's connector settings, enter it in 'OAuth Client Secret'",
-                "3. Leave 'OAuth Client ID' empty or enter any value"
+            "message": "API key not found. Please configure it in one of these ways:",
+            "options": [
+                "1. Set API_KEY in Vercel environment variables",
+                "2. Add ?api_key=YOUR_KEY to the URL in Claude config",
+                "3. Use Basic auth in Claude config (password field)",
+                "4. Check Vercel logs for debugging info"
             ],
-            "debug": "Check Vercel logs for [DEBUG] messages to see OAuth flow"
+            "claude_config_examples": {
+                "option1_env_var": {
+                    "url": "https://companyprospect-mcp.vercel.app"
+                },
+                "option2_query_param": {
+                    "url": "https://companyprospect-mcp.vercel.app?api_key=YOUR_KEY"
+                },
+                "option3_basic_auth": {
+                    "url": "https://companyprospect-mcp.vercel.app",
+                    "auth": {
+                        "type": "basic",
+                        "username": "user",
+                        "password": "YOUR_KEY"
+                    }
+                }
+            }
         }
     
     try:
