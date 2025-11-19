@@ -8,7 +8,7 @@ import sys
 
 # API configuration
 API_URL = os.environ.get("API_URL", "https://api.nummary.co")
-FALLBACK_API_KEY = os.environ.get("API_KEY")  # Optional fallback
+FALLBACK_API_KEY=''
 
 class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
@@ -16,27 +16,23 @@ class handler(BaseHTTPRequestHandler):
         origin = self.headers.get('Origin', '*')
         self.send_header('Access-Control-Allow-Origin', origin)
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Api-Key')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-User-Id')
         self.send_header('Access-Control-Allow-Credentials', 'true')
         self.end_headers()
     
     def extract_api_key_from_path(self, path):
-        """Extract API key if embedded in path like /key/nm_xxx/... or /nm_xxx/..."""
+        """Extract API Key if embedded in path like /key/abcd123xxx/... or /abcd123xxx/..."""
         parts = path.strip('/').split('/')
         
-        # Check if path starts with /key/API_KEY/...
         if len(parts) >= 2 and parts[0] == 'key':
             api_key = parts[1]
-            if api_key.startswith('nm_'):
-                remaining_path = '/' + '/'.join(parts[2:]) if len(parts) > 2 else '/'
-                print(f"[DEBUG] Found API key in path: /key/{api_key[:8]}***", file=sys.stderr)
-                return api_key, remaining_path
+            remaining_path = '/' + '/'.join(parts[2:]) if len(parts) > 2 else '/'
+            return api_key, remaining_path
         
-        # Check if path starts with /API_KEY/... (where API_KEY starts with nm_)
-        if len(parts) >= 1 and parts[0].startswith('nm_'):
+        # Check if path starts with /API_KEY/...
+        if len(parts) >= 1:
             api_key = parts[0]
             remaining_path = '/' + '/'.join(parts[1:]) if len(parts) > 1 else '/'
-            print(f"[DEBUG] Found API key in path: /{api_key[:8]}***", file=sys.stderr)
             return api_key, remaining_path
         
         return None, path
@@ -48,7 +44,7 @@ class handler(BaseHTTPRequestHandler):
         # Also check query parameters as backup
         parsed_url = urlparse(self.path)
         query_params = parse_qs(parsed_url.query)
-        api_key_from_query = query_params.get('api_key', [None])[0]
+        api_key_from_query = query_params.get('key', [None])[0]
         
         # Use path API key first, then query param
         api_key = api_key_from_path or api_key_from_query
@@ -74,7 +70,7 @@ class handler(BaseHTTPRequestHandler):
             # Keep the API key in the path for subsequent requests
             endpoint = f"{proto}://{host}{self.path}"
         elif api_key_from_query:
-            endpoint = f"{proto}://{host}{parsed_url.path}?api_key={api_key_from_query}"
+            endpoint = f"{proto}://{host}{parsed_url.path}?key={api_key_from_query}"
         else:
             endpoint = f"{proto}://{host}{self.path}"
         
@@ -96,7 +92,7 @@ class handler(BaseHTTPRequestHandler):
         api_key = api_key_from_path
         
         if api_key:
-            print(f"[DEBUG] POST: Found API key in path", file=sys.stderr)
+            print(f"[DEBUG] POST: Found API Key in path", file=sys.stderr)
         
         # If no API key in path, try other sources
         if not api_key:
@@ -105,7 +101,7 @@ class handler(BaseHTTPRequestHandler):
                 query_params = parse_qs(self.path.split('?')[1])
                 api_key = query_params.get('api_key', [None])[0]
                 if api_key:
-                    print(f"[DEBUG] POST: Found API key in query params", file=sys.stderr)
+                    print(f"[DEBUG] POST: Found API Key in query params", file=sys.stderr)
         
         # Check Referer header for API key
         if not api_key:
@@ -125,9 +121,9 @@ class handler(BaseHTTPRequestHandler):
         
         # Check custom X-Api-Key header
         if not api_key:
-            api_key = self.headers.get('X-Api-Key')
+            api_key = self.headers.get('X-User-Id')
             if api_key:
-                print(f"[DEBUG] POST: Found API key in X-Api-Key header", file=sys.stderr)
+                print(f"[DEBUG] POST: Found API key in X-User-Id header", file=sys.stderr)
         
         # Check Authorization header
         if not api_key:
@@ -155,7 +151,7 @@ class handler(BaseHTTPRequestHandler):
         
         # Fall back to environment variable
         if not api_key:
-            api_key = FALLBACK_API_KEY
+            api_key = 'FALLBACK_API_KEY'
             if api_key:
                 print(f"[DEBUG] POST: Using fallback API key from environment", file=sys.stderr)
             else:
@@ -279,16 +275,14 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(response).encode())
         return
 
-def call_nummary_api(endpoint, body, api_key=None):
-    if not api_key:
+def call_nummary_api(endpoint, body, user_id=None):
+    if not user_id:
         return {
             "error": "Authentication required",
-            "message": "API key not found. For Claude Desktop, use the path-based format.",
+            "message": "User ID not found. For Claude Desktop, use the path-based format.",
             "instructions": [
-                "Configure Claude Desktop with your API key in the URL path:",
-                "https://companyprospect-mcp.vercel.app/nm_9xxxxx",
-                "or",
-                "https://companyprospect-mcp.vercel.app/key/nm_9xxxxx"
+                "Configure Claude Desktop with your User ID in the URL path:",
+                "https://companyprospect-mcp.vercel.app/abcd123xxx",
             ],
             "troubleshooting": "Check Vercel logs for [DEBUG] messages to see what's being received"
         }
@@ -296,21 +290,19 @@ def call_nummary_api(endpoint, body, api_key=None):
     try:
         url = f"{API_URL}{endpoint}"
         headers = {
-            "X-Api-Key": api_key,
+            "X-User-Id": user_id,
             "Accept": "application/json",
             "Content-Type": "application/json"
         }
-        print(f"[DEBUG] Calling Nummary API: {url}", file=sys.stderr)
         response = requests.post(url, headers=headers, json=body)
         if response.ok:
-            print(f"[DEBUG] Nummary API call successful", file=sys.stderr)
             return response.json()
         else:
             print(f"[DEBUG] Nummary API error: {response.status_code}", file=sys.stderr)
             return {
                 "error": f"API error: {response.status_code}",
                 "message": response.text,
-                "hint": "Check if your API key is valid"
+                "hint": "Check if your User ID is valid"
             }
     except Exception as e:
         print(f"[DEBUG] Nummary API exception: {str(e)}", file=sys.stderr)
