@@ -76,6 +76,30 @@ El servidor MCP soporta autenticación opcional con Bearer token:
 - **Con autenticación**: Si se proporciona un token, debe ser válido
 - **Token válido**: `Bearer nummary-mcp-token-2024`
 
+## Environment Variables (Vercel Deployment)
+
+The server requires the following environment variables to be configured:
+
+- `NUMMARY_API_KEY` - Your Nummary API key
+- `NUMMARY_USER_ID` - Your Nummary user ID
+
+### Setup in Vercel
+
+1. Go to your Vercel project dashboard
+2. Navigate to **Settings** → **Environment Variables**
+3. Add the following variables:
+   - `NUMMARY_API_KEY` = `nm_92051a269374f2c79569b3e07231dbd5`
+   - `NUMMARY_USER_ID` = `bba3be65-fe5e-4ff9-9951-24a0cb2c912c`
+4. Redeploy your project
+
+### Local Development
+
+1. Copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+2. Edit `.env` and add your credentials
+
 ## Configuración en OpenAI Agent Builder
 
 ### Opción 1: Sin autenticación
