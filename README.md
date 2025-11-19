@@ -1,10 +1,11 @@
 # Nummary MCP Server with Interactive Login
 
-A Model Context Protocol (MCP) server for the Nummary API with interactive OAuth authentication, deployed on Vercel.
+A Model Context Protocol (MCP) server for the Nummary API with interactive authentication via Nummary's login page, deployed on Vercel.
 
 ## Features
 
-- **Interactive Login**: Users authenticate by entering their Nummary API key through a secure web form
+- **Interactive Nummary Login**: Users authenticate through the official Nummary login page
+- **Secure API Key Extraction**: Simple process to get API key from Nummary cookies
 - **OAuth 2.0 Flow**: Standard OAuth flow for secure authentication
 - **MCP Tools**:
   - `company_typeahead`: Search for companies by name
@@ -15,16 +16,22 @@ A Model Context Protocol (MCP) server for the Nummary API with interactive OAuth
 ### Authentication Flow
 
 1. **User initiates connection** in Claude Desktop
-2. **Redirected to login page** where they enter their Nummary API key
-3. **API key is securely passed** through OAuth token exchange
-4. **Authenticated session** established for all API calls
+2. **Opens Nummary login page** at [https://app.nummary.co/login/](https://app.nummary.co/login/)
+3. **Logs in to Nummary** with their credentials
+4. **Extracts API key** from the `AUTH_APIKEY` cookie using provided JavaScript
+5. **Enters API key** in the secure form
+6. **Authenticated session** established for all API calls
 
-### Interactive Login Page
+### Step-by-Step Process
 
-When users connect through Claude, they'll see a clean login interface:
-- Secure form to enter their Nummary API key
-- Link to Nummary if they need to get an API key
-- Session-based security for the OAuth flow
+When users connect through Claude, they'll see a guided process:
+
+1. **Login to Nummary**: Click to open the Nummary login page in a new tab
+2. **Get API Key**: After logging in, run the provided JavaScript snippet in the browser console:
+   ```javascript
+   document.cookie.split(';').find(c => c.trim().startsWith('AUTH_APIKEY='))?.split('=')[1] || 'API Key not found'
+   ```
+3. **Connect to Claude**: Paste the API key in the secure form to complete authentication
 
 ## Setup
 
@@ -37,8 +44,7 @@ When users connect through Claude, they'll see a clean login interface:
 
 2. **Optional Environment Variables**:
    - `API_URL`: Nummary API URL (defaults to `https://api.nummary.co`)
-   - `NUMMARY_AUTH_URL`: Link to Nummary login page (defaults to `https://app.nummary.com/login`)
-   - `API_KEY`: Fallback API key (optional - users can authenticate interactively)
+   - `API_KEY`: Fallback API key (optional - users authenticate interactively)
 
 ### Configuring in Claude Desktop
 
@@ -50,7 +56,7 @@ When users connect through Claude, they'll see a clean login interface:
    - **OAuth Client ID**: (leave empty or enter any value)
    - **OAuth Client Secret**: (leave empty - authentication is interactive)
 
-4. When you connect, you'll be redirected to enter your API key
+4. When you connect, follow the step-by-step instructions to authenticate
 
 ## Local Development
 
@@ -66,7 +72,8 @@ vercel dev
 
 ## Security
 
-- API keys are never stored permanently on the server
+- API keys are extracted from secure Nummary cookies
+- Keys are never stored permanently on the server
 - Session-based authentication with unique session IDs
 - Secure OAuth 2.0 token exchange
 - HTTPS encryption for all communications
@@ -94,9 +101,28 @@ Find competitors based on companies and keywords:
 
 ## Troubleshooting
 
-- **Can't connect**: Ensure the server is deployed and accessible
-- **Authentication fails**: Check that your API key is valid
-- **API errors**: Verify your API key has the necessary permissions
+### Can't get API key
+1. Make sure you're logged into Nummary first
+2. Open browser developer console (F12)
+3. Run the provided JavaScript snippet
+4. The API key should appear - copy it
+
+### Authentication fails
+- Verify your API key is valid
+- Ensure you're copying the complete API key
+- Check that you're logged into Nummary
+
+### API errors
+- Verify your Nummary account has API access
+- Check that your API key has the necessary permissions
+
+## How the Cookie Extraction Works
+
+After logging into Nummary at [https://app.nummary.co/login/](https://app.nummary.co/login/), Nummary sets two important cookies:
+- `AUTH_APIKEY`: Your API key for making API calls
+- `AUTH_USER`: Your user information
+
+The provided JavaScript snippet safely extracts the `AUTH_APIKEY` cookie value, which is then used for API authentication.
 
 ## License
 

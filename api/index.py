@@ -7,7 +7,7 @@ import uuid
 
 # API configuration
 API_URL = os.environ.get("API_URL", "https://api.nummary.co")
-NUMMARY_AUTH_URL = os.environ.get("NUMMARY_AUTH_URL", "https://app.nummary.com/login")
+NUMMARY_LOGIN_URL = "https://app.nummary.co/login/"
 
 # Store active sessions (in production, use a proper database or Redis)
 sessions = {}
@@ -44,105 +44,256 @@ class handler(BaseHTTPRequestHandler):
                 'client_id': client_id
             }
             
-            # Return an HTML page with login form
+            # Return an HTML page that handles the Nummary login flow
             html_content = f"""
             <!DOCTYPE html>
             <html>
             <head>
-                <title>Login to Nummary</title>
+                <title>Connect to Nummary</title>
                 <style>
+                    * {{
+                        margin: 0;
+                        padding: 0;
+                        box-sizing: border-box;
+                    }}
                     body {{
                         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
                         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        min-height: 100vh;
                         display: flex;
                         justify-content: center;
                         align-items: center;
-                        height: 100vh;
-                        margin: 0;
+                        padding: 20px;
                     }}
-                    .login-container {{
+                    .container {{
                         background: white;
                         padding: 40px;
                         border-radius: 10px;
                         box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-                        width: 400px;
+                        max-width: 500px;
+                        width: 100%;
                     }}
                     h2 {{
-                        margin-top: 0;
                         color: #333;
-                        text-align: center;
+                        margin-bottom: 10px;
+                        display: flex;
+                        align-items: center;
+                        gap: 10px;
                     }}
-                    .form-group {{
-                        margin-bottom: 20px;
-                    }}
-                    label {{
-                        display: block;
-                        margin-bottom: 5px;
+                    .subtitle {{
                         color: #666;
-                        font-weight: 500;
+                        margin-bottom: 30px;
+                        line-height: 1.5;
                     }}
-                    input {{
-                        width: 100%;
-                        padding: 12px;
-                        border: 1px solid #ddd;
+                    .step {{
+                        background: #f8f9fa;
+                        border-left: 4px solid #667eea;
+                        padding: 20px;
+                        margin-bottom: 20px;
                         border-radius: 5px;
-                        font-size: 16px;
-                        box-sizing: border-box;
                     }}
-                    input:focus {{
-                        outline: none;
-                        border-color: #667eea;
+                    .step-header {{
+                        font-weight: 600;
+                        color: #333;
+                        margin-bottom: 10px;
+                        display: flex;
+                        align-items: center;
+                        gap: 10px;
                     }}
-                    button {{
-                        width: 100%;
-                        padding: 12px;
+                    .step-number {{
+                        background: #667eea;
+                        color: white;
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 50%;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        font-size: 14px;
+                    }}
+                    .step-content {{
+                        color: #666;
+                        margin-left: 38px;
+                        line-height: 1.6;
+                    }}
+                    .button {{
                         background: #667eea;
                         color: white;
                         border: none;
+                        padding: 12px 24px;
                         border-radius: 5px;
                         font-size: 16px;
                         cursor: pointer;
-                        font-weight: 600;
+                        text-decoration: none;
+                        display: inline-block;
+                        margin: 10px 0;
+                        transition: background 0.2s;
                     }}
-                    button:hover {{
+                    .button:hover {{
                         background: #5a67d8;
                     }}
-                    .info {{
-                        background: #f7f7f7;
-                        border-left: 4px solid #667eea;
+                    .code-block {{
+                        background: #2d3748;
+                        color: #68d391;
                         padding: 15px;
-                        margin-bottom: 20px;
                         border-radius: 5px;
+                        font-family: 'Monaco', 'Courier New', monospace;
+                        font-size: 14px;
+                        margin: 10px 0;
+                        position: relative;
+                        overflow-x: auto;
                     }}
-                    .error {{
-                        color: #e74c3c;
-                        text-align: center;
+                    .copy-button {{
+                        position: absolute;
+                        top: 10px;
+                        right: 10px;
+                        background: #4a5568;
+                        color: white;
+                        border: none;
+                        padding: 5px 10px;
+                        border-radius: 3px;
+                        cursor: pointer;
+                        font-size: 12px;
+                    }}
+                    .copy-button:hover {{
+                        background: #5a6578;
+                    }}
+                    .input-group {{
+                        margin: 20px 0;
+                    }}
+                    label {{
+                        display: block;
+                        margin-bottom: 8px;
+                        color: #333;
+                        font-weight: 500;
+                    }}
+                    input[type="password"] {{
+                        width: 100%;
+                        padding: 12px;
+                        border: 2px solid #e2e8f0;
+                        border-radius: 5px;
+                        font-size: 16px;
+                        transition: border-color 0.2s;
+                    }}
+                    input[type="password"]:focus {{
+                        outline: none;
+                        border-color: #667eea;
+                    }}
+                    .submit-button {{
+                        width: 100%;
+                        background: #48bb78;
+                        color: white;
+                        border: none;
+                        padding: 14px;
+                        border-radius: 5px;
+                        font-size: 16px;
+                        font-weight: 600;
+                        cursor: pointer;
                         margin-top: 10px;
+                    }}
+                    .submit-button:hover {{
+                        background: #38a169;
+                    }}
+                    .success-message {{
+                        display: none;
+                        background: #c6f6d5;
+                        border: 1px solid #9ae6b4;
+                        color: #22543d;
+                        padding: 12px;
+                        border-radius: 5px;
+                        margin: 10px 0;
+                    }}
+                    .divider {{
+                        height: 1px;
+                        background: #e2e8f0;
+                        margin: 30px 0;
                     }}
                 </style>
             </head>
             <body>
-                <div class="login-container">
-                    <h2>🔐 Connect to Nummary API</h2>
-                    <div class="info">
-                        Enter your Nummary API key to authorize this connection.
-                    </div>
-                    <form method="POST" action="/callback">
-                        <input type="hidden" name="session_id" value="{session_id}">
-                        <div class="form-group">
-                            <label for="api_key">API Key:</label>
-                            <input type="password" id="api_key" name="api_key" required 
-                                   placeholder="Enter your Nummary API key">
+                <div class="container">
+                    <h2>🔐 Connect Nummary to Claude</h2>
+                    <p class="subtitle">Follow these steps to securely connect your Nummary account</p>
+                    
+                    <div class="step">
+                        <div class="step-header">
+                            <span class="step-number">1</span>
+                            Log in to Nummary
                         </div>
-                        <button type="submit">Authorize Connection</button>
-                    </form>
-                    <div style="margin-top: 20px; text-align: center; color: #999; font-size: 14px;">
-                        Don't have an API key? 
-                        <a href="{NUMMARY_AUTH_URL}" target="_blank" style="color: #667eea;">
-                            Get one from Nummary
-                        </a>
+                        <div class="step-content">
+                            Click the button below to open Nummary in a new tab and log in with your credentials.
+                            <br>
+                            <a href="{NUMMARY_LOGIN_URL}" target="_blank" class="button">
+                                Open Nummary Login →
+                            </a>
+                        </div>
+                    </div>
+                    
+                    <div class="step">
+                        <div class="step-header">
+                            <span class="step-number">2</span>
+                            Get Your API Key
+                        </div>
+                        <div class="step-content">
+                            After logging in, run this command in your browser's developer console (F12) on the Nummary page:
+                            <div class="code-block">
+                                <button class="copy-button" onclick="copyCode()">Copy</button>
+                                <code id="codeSnippet">document.cookie.split(';').find(c => c.trim().startsWith('AUTH_APIKEY='))?.split('=')[1] || 'API Key not found'</code>
+                            </div>
+                            This will display your API key. Copy it for the next step.
+                        </div>
+                    </div>
+                    
+                    <div class="step">
+                        <div class="step-header">
+                            <span class="step-number">3</span>
+                            Enter Your API Key
+                        </div>
+                        <div class="step-content">
+                            <form method="POST" action="/callback" onsubmit="handleSubmit(event)">
+                                <input type="hidden" name="session_id" value="{session_id}">
+                                <div class="input-group">
+                                    <label for="api_key">Paste your API key here:</label>
+                                    <input type="password" id="api_key" name="api_key" required 
+                                           placeholder="Your Nummary API key" 
+                                           autocomplete="off">
+                                </div>
+                                <button type="submit" class="submit-button">
+                                    Connect to Claude
+                                </button>
+                            </form>
+                            <div class="success-message" id="successMsg">
+                                ✅ Connecting... You will be redirected shortly.
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="divider"></div>
+                    
+                    <div style="text-align: center; color: #718096; font-size: 14px;">
+                        <p>💡 <strong>Tip:</strong> Your API key is securely transmitted and not stored permanently.</p>
+                        <p style="margin-top: 10px;">Having trouble? Make sure you're logged into Nummary first.</p>
                     </div>
                 </div>
+                
+                <script>
+                    function copyCode() {{
+                        const code = document.getElementById('codeSnippet').textContent;
+                        navigator.clipboard.writeText(code);
+                        const button = document.querySelector('.copy-button');
+                        button.textContent = 'Copied!';
+                        setTimeout(() => {{
+                            button.textContent = 'Copy';
+                        }}, 2000);
+                    }}
+                    
+                    function handleSubmit(e) {{
+                        const apiKey = document.getElementById('api_key').value;
+                        if (apiKey) {{
+                            document.getElementById('successMsg').style.display = 'block';
+                        }}
+                    }}
+                </script>
             </body>
             </html>
             """
@@ -192,8 +343,7 @@ class handler(BaseHTTPRequestHandler):
             # Clean up session
             del sessions[session_id]
             
-            # Generate authorization code (in this case, we'll use the API key as the code)
-            # In production, you'd store this mapping securely
+            # Use the API key as the authorization code
             auth_code = api_key
             
             # Redirect back to the client with the authorization code
@@ -231,7 +381,7 @@ class handler(BaseHTTPRequestHandler):
                 }).encode())
                 return
             
-            # The code IS the API key in our simplified flow
+            # The code IS the API key in our flow
             response = {
                 "access_token": code,
                 "token_type": "Bearer",
