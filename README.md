@@ -1,10 +1,10 @@
 # Nummary MCP Server
 
-A Model Context Protocol (MCP) server for the Nummary API where each user provides their own API UserID.
+A Model Context Protocol (MCP) server for the Nummary API where each user provides their own API Key.
 
 ## Setup for Claude Desktop
 
-Since Claude Desktop doesn't properly pass URL query parameters through SSE connections, embed your API UserID in the URL path:
+Since Claude Desktop doesn't properly pass URL query parameters through SSE connections, embed your API Key in the URL path:
 
 ### 1. Deploy to Vercel
 
@@ -12,11 +12,11 @@ Since Claude Desktop doesn't properly pass URL query parameters through SSE conn
 git push origin main
 ```
 
-### 2. Get Your Nummary User ID
+### 2. Get Your Nummary Key
 
 Log in to [Nummary](https://app.nummary.co/login/) and run this in browser console:
 ```javascript
-document.cookie.split(';').find(c => c.trim().startsWith('AUTH_USERID='))?.split('=')[1]
+document.cookie.split(';').find(c => c.trim().startsWith('AUTH_API_KEY='))?.split('=')[1]
 ```
 
 ### 3. Configure Claude Desktop
@@ -26,7 +26,7 @@ Find your Claude Desktop config file:
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 - **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
-Add your configuration with your API UserID **in the URL path**:
+Add your configuration with your API Key **in the URL path**:
 
 ```json
 {
@@ -38,7 +38,7 @@ Add your configuration with your API UserID **in the URL path**:
 }
 ```
 
-Replace `abcd123xxx` with your actual full Nummary API UserID.
+Replace `abcd123xxx` with your actual full Nummary API Key.
 
 ### 4. Restart Claude Desktop
 
@@ -46,8 +46,8 @@ Close and reopen Claude Desktop for the changes to take effect.
 
 ## How It Works
 
-- **Path-based API UserID**: Your API UserID is embedded in the URL path (e.g., `/abcd123xxx`)
-- **Per-user authentication**: Each user configures their own API UserID
+- **Path-based API Key**: Your API Key is embedded in the URL path (e.g., `/abcd123xxx`)
+- **Per-user authentication**: Each user configures their own API Key
 - **No shared credentials**: No environment variables or shared keys on the server
 - **Claude Desktop compatible**: Path segments are preserved through SSE connections
 
@@ -70,15 +70,15 @@ Find competitors based on companies and keywords:
 ### Check Vercel Logs
 1. Go to Vercel Dashboard → Functions → Logs
 2. Look for `[DEBUG]` messages:
-   - `[DEBUG] Found API UserID in path: /nm_9xxx***` - Good! UserID is being received
-   - `[DEBUG] POST: NO API UserID FOUND!` - UserID isn't reaching the server
+   - `[DEBUG] Found API Key in path: /nm_9xxx***` - Good! API Key is being received
+   - `[DEBUG] POST: NO API Key FOUND!` - API Key isn't reaching the server
 
 ### Common Issues
 
 **"Authentication required" error:**
 - Make sure your API key is in the URL path, not as a query parameter
 - Format: `https://companyprospect-mcp.vercel.app/abcd123xxx`
-- NOT: `https://companyprospect-mcp.vercel.app?userid=abcd123xxx`
+- NOT: `https://companyprospect-mcp.vercel.app?api_key=abcd123xxx`
 
 **Connection fails:**
 - Ensure you're using the full API key, not truncated

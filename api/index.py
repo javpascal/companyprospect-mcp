@@ -16,7 +16,7 @@ class handler(BaseHTTPRequestHandler):
         origin = self.headers.get('Origin', '*')
         self.send_header('Access-Control-Allow-Origin', origin)
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-User-Id')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Api-Key')
         self.send_header('Access-Control-Allow-Credentials', 'true')
         self.end_headers()
     
@@ -121,9 +121,9 @@ class handler(BaseHTTPRequestHandler):
         
         # Check custom X-Api-Key header
         if not api_key:
-            api_key = self.headers.get('X-User-Id')
+            api_key = self.headers.get('X-Api-Key')
             if api_key:
-                print(f"[DEBUG] POST: Found API key in X-User-Id header", file=sys.stderr)
+                print(f"[DEBUG] POST: Found API key in X-Api-Key header", file=sys.stderr)
         
         # Check Authorization header
         if not api_key:
@@ -275,13 +275,13 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(response).encode())
         return
 
-def call_nummary_api(endpoint, body, user_id=None):
-    if not user_id:
+def call_nummary_api(endpoint, body, api_key=None):
+    if not api_key:
         return {
             "error": "Authentication required",
-            "message": "User ID not found. For Claude Desktop, use the path-based format.",
+            "message": "API Key not found. For Claude Desktop, use the path-based format.",
             "instructions": [
-                "Configure Claude Desktop with your User ID in the URL path:",
+                "Configure Claude Desktop with your API Key in the URL path:",
                 "https://companyprospect-mcp.vercel.app/abcd123xxx",
             ],
             "troubleshooting": "Check Vercel logs for [DEBUG] messages to see what's being received"
@@ -290,7 +290,7 @@ def call_nummary_api(endpoint, body, user_id=None):
     try:
         url = f"{API_URL}{endpoint}"
         headers = {
-            "X-User-Id": user_id,
+            "X-Api-Key": api_key,
             "Accept": "application/json",
             "Content-Type": "application/json"
         }
@@ -302,7 +302,7 @@ def call_nummary_api(endpoint, body, user_id=None):
             return {
                 "error": f"API error: {response.status_code}",
                 "message": response.text,
-                "hint": "Check if your User ID is valid"
+                "hint": "Check if your API Key is valid"
             }
     except Exception as e:
         print(f"[DEBUG] Nummary API exception: {str(e)}", file=sys.stderr)
