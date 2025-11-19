@@ -249,7 +249,17 @@ class handler(BaseHTTPRequestHandler):
                 }
             elif tool_name == "find_competitors":
                 context = args.get("context", [])
-                result = call_nummary_api("/app/naturalsearch", {"context": context}, api_key)
+                print(f"[DEBUG] find_competitors context: {json.dumps(context)}", file=sys.stderr)
+                print(f"[DEBUG] find_competitors full args: {json.dumps(args)}", file=sys.stderr)
+                
+                # Call the API with the context
+                body = {"context": context}
+                print(f"[DEBUG] Sending to naturalsearch API: {json.dumps(body)}", file=sys.stderr)
+                
+                result = call_nummary_api("/app/naturalsearch", body, api_key)
+                
+                print(f"[DEBUG] naturalsearch API response: {json.dumps(result)[:500] if isinstance(result, dict) else str(result)[:500]}", file=sys.stderr)
+                
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
