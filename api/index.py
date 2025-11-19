@@ -3,10 +3,9 @@ import json
 import requests
 import os
 
-# Nummary API configuration
-API_URL = "https://api.nummary.co"
-API_KEY = os.environ.get("NUMMARY_API_KEY")
-API_USER = os.environ.get("NUMMARY_USER_ID")
+# API configuration
+API_URL = os.environ.get("API_URL", "https://api.nummary.co")
+API_KEY = os.environ.get("API_KEY")
 
 class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
@@ -149,17 +148,16 @@ class handler(BaseHTTPRequestHandler):
 
 def call_nummary_api(endpoint, body):
     # Check if API credentials are configured
-    if not API_KEY or not API_USER:
+    if not API_KEY:
         return {
             "error": "Configuration error",
-            "message": "NUMMARY_API_KEY and NUMMARY_USER_ID environment variables must be set. Please configure them in your Vercel project settings."
+            "message": "API_KEY environment variable must be set. Please configure it in your Vercel project settings."
         }
     
     try:
         url = f"{API_URL}{endpoint}"
         headers = {
             "X-Api-Key": API_KEY,
-            "X-User-Id": API_USER,
             "Accept": "application/json",
             "Content-Type": "application/json"
         }
