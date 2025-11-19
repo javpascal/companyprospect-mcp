@@ -1,62 +1,59 @@
-# Nummary MCP Server with Interactive Login
+# Nummary MCP Server
 
-A Model Context Protocol (MCP) server for the Nummary API with interactive authentication via Nummary's login page, deployed on Vercel.
+A Model Context Protocol (MCP) server for the Nummary API, deployed on Vercel.
+
+## Quick Setup
+
+### 1. Get Your Nummary API Key
+
+1. Log in to Nummary at [https://app.nummary.co/login/](https://app.nummary.co/login/)
+2. In your browser's developer console (F12), run:
+   ```javascript
+   document.cookie.split(';').find(c => c.trim().startsWith('AUTH_APIKEY='))?.split('=')[1]
+   ```
+3. Copy the API key that appears
+
+### 2. Deploy to Vercel
+
+1. Deploy this project to Vercel
+2. In Vercel dashboard, go to **Project Settings → Environment Variables**
+3. Add: `API_KEY` = `your-nummary-api-key`
+4. Redeploy for changes to take effect
+
+### 3. Configure in Claude Desktop
+
+Add to your Claude Desktop configuration:
+
+```json
+{
+  "mcpServers": {
+    "nummary": {
+      "url": "https://your-project.vercel.app"
+    }
+  }
+}
+```
+
+**Note**: If Claude tries to use Vercel OAuth (shows Vercel login), you may need to use a custom domain or alternative deployment platform.
 
 ## Features
 
-- **Interactive Nummary Login**: Users authenticate through the official Nummary login page
-- **Secure API Key Extraction**: Simple process to get API key from Nummary cookies
-- **OAuth 2.0 Flow**: Standard OAuth flow for secure authentication
-- **MCP Tools**:
-  - `company_typeahead`: Search for companies by name
-  - `find_competitors`: Find competitors based on context
+### MCP Tools Available
 
-## How It Works
+- **`company_typeahead`**: Search for companies by name
+  ```json
+  {"query": "Microsoft"}
+  ```
 
-### Authentication Flow
-
-1. **User initiates connection** in Claude Desktop
-2. **Opens Nummary login page** at [https://app.nummary.co/login/](https://app.nummary.co/login/)
-3. **Logs in to Nummary** with their credentials
-4. **Extracts API key** from the `AUTH_APIKEY` cookie using provided JavaScript
-5. **Enters API key** in the secure form
-6. **Authenticated session** established for all API calls
-
-### Step-by-Step Process
-
-When users connect through Claude, they'll see a guided process:
-
-1. **Login to Nummary**: Click to open the Nummary login page in a new tab
-2. **Get API Key**: After logging in, run the provided JavaScript snippet in the browser console:
-   ```javascript
-   document.cookie.split(';').find(c => c.trim().startsWith('AUTH_APIKEY='))?.split('=')[1] || 'API Key not found'
-   ```
-3. **Connect to Claude**: Paste the API key in the secure form to complete authentication
-
-## Setup
-
-### Deployment on Vercel
-
-1. **Deploy to Vercel**:
-   ```bash
-   git push origin main
-   ```
-
-2. **Optional Environment Variables**:
-   - `API_URL`: Nummary API URL (defaults to `https://api.nummary.co`)
-   - `API_KEY`: Fallback API key (optional - users authenticate interactively)
-
-### Configuring in Claude Desktop
-
-1. Open Claude Desktop
-2. Click "Add custom connector"
-3. Configure:
-   - **Name**: `Nummary API`
-   - **Remote MCP server URL**: `https://companyprospect-mcp.vercel.app`
-   - **OAuth Client ID**: (leave empty or enter any value)
-   - **OAuth Client Secret**: (leave empty - authentication is interactive)
-
-4. When you connect, follow the step-by-step instructions to authenticate
+- **`find_competitors`**: Find competitors based on companies and keywords
+  ```json
+  {
+    "context": [
+      {"type": "company", "text": "Microsoft"},
+      {"type": "keyword", "text": "cloud computing"}
+    ]
+  }
+  ```
 
 ## Local Development
 
@@ -64,65 +61,41 @@ When users connect through Claude, they'll see a guided process:
 # Install dependencies
 pip install -r requirements.txt
 
+# Set environment variable
+export API_KEY=your-nummary-api-key
+
 # Run with Vercel
 vercel dev
-
-# Access at http://localhost:3000
-```
-
-## Security
-
-- API keys are extracted from secure Nummary cookies
-- Keys are never stored permanently on the server
-- Session-based authentication with unique session IDs
-- Secure OAuth 2.0 token exchange
-- HTTPS encryption for all communications
-
-## API Tools
-
-### company_typeahead
-Search for companies by name:
-```json
-{
-  "query": "Microsoft"
-}
-```
-
-### find_competitors
-Find competitors based on companies and keywords:
-```json
-{
-  "context": [
-    {"type": "company", "text": "Microsoft"},
-    {"type": "keyword", "text": "cloud computing"}
-  ]
-}
 ```
 
 ## Troubleshooting
 
-### Can't get API key
-1. Make sure you're logged into Nummary first
-2. Open browser developer console (F12)
-3. Run the provided JavaScript snippet
-4. The API key should appear - copy it
+### Vercel OAuth Redirect Issue
+If Claude Desktop shows a Vercel login screen instead of connecting directly:
+- This happens because Claude detects `.vercel.app` domains
+- Solution: Use a custom domain or deploy to a different platform
 
-### Authentication fails
-- Verify your API key is valid
-- Ensure you're copying the complete API key
-- Check that you're logged into Nummary
+### API Key Not Working
+- Ensure you copied the complete API key from the cookie
+- Verify the API key is correctly set in Vercel environment variables
+- Check that your Nummary account has API access enabled
 
-### API errors
-- Verify your Nummary account has API access
-- Check that your API key has the necessary permissions
+### Getting Your API Key from Nummary
+After logging into Nummary, the `AUTH_APIKEY` cookie contains your API key. You can extract it using the browser console command provided above.
 
-## How the Cookie Extraction Works
+## Architecture
 
-After logging into Nummary at [https://app.nummary.co/login/](https://app.nummary.co/login/), Nummary sets two important cookies:
-- `AUTH_APIKEY`: Your API key for making API calls
-- `AUTH_USER`: Your user information
+This server:
+1. Receives MCP requests from Claude
+2. Authenticates using the API key from environment variables
+3. Forwards requests to Nummary API
+4. Returns formatted responses to Claude
 
-The provided JavaScript snippet safely extracts the `AUTH_APIKEY` cookie value, which is then used for API authentication.
+## Security
+
+- API key is stored securely in Vercel environment variables
+- All API calls use HTTPS
+- No credentials are logged or exposed
 
 ## License
 
