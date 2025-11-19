@@ -42,6 +42,18 @@ class handler(BaseHTTPRequestHandler):
         
         data = f"event: endpoint\ndata: {endpoint}\n\n"
         self.wfile.write(data.encode('utf-8'))
+        self.wfile.flush()
+        
+        # Hack: Keep connection alive for Vercel
+        # Vercel will eventually kill this (10-60s), but it might be enough for ChatGPT
+        import time
+        try:
+            while True:
+                time.sleep(5)
+                self.wfile.write(b": ping\n\n")
+                self.wfile.flush()
+        except Exception:
+            pass
 
     def do_POST(self):
         try:
