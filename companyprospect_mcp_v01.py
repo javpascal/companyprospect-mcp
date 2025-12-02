@@ -215,14 +215,23 @@ def fastapi_app():
         return [{'query': q, 'result': r} for q, r in zip(query, results)]
 
 
-    async def lookalike_from_ids(query: str) -> Dict[str, Any]:
-        """Query ClickHouse for lookalike companies for a list of comp_id"""
+    async def lookalike_from_ids(query: str, filter_hc: Optional[int] = None, filter_cc2: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Query ClickHouse for lookalike companies for a list of comp_id with optional filters"""
         if not query:
             return {'columns': [], 'rows': []}
 
         query_list = [int(s.strip()) for s in query.split(',') if s.strip().isdigit()]
         if not query_list:
             return {'columns': [], 'rows': []}
+        
+        # Build query variables with optional filters
+        query_variables = {'query': query_list}
+        
+        # Add headcount filter (default to 0 if not provided)
+        query_variables['filter_hc'] = filter_hc if filter_hc is not None else 0
+        
+        # Add country filter (default to empty array if not provided)
+        query_variables['filter_cc2'] = filter_cc2 if filter_cc2 else []
         
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -233,7 +242,7 @@ def fastapi_app():
                     'x-clickhouse-endpoint-version': '2',
                 },
                 auth=(CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET),
-                json={'queryVariables': {'query': query_list}}
+                json={'queryVariables': query_variables}
             )
             
         if response.status_code == 200:
@@ -330,14 +339,26 @@ def fastapi_app():
         return JSONResponse(content=lookalikes)
 
 
-    @web_app.get("/v01/lookalike_from_ids")
-    async def api_lookalike_from_ids(query: str):
+    @web_app.post("/v01/lookalike_from_ids")
+    async def api_lookalike_from_ids(payload: Dict[str, Any]):
         """
-        Generate lookalikes for a list of comp_id.
+        Generate lookalikes for a list of comp_id with optional filters.
         
-        Query param: query=["comp_id1", "comp_id2", "comp_id3"]
+        Request body:
+        {
+            "company_ids": [10667, 12345],      // required: list of comp_ids
+            "filter_hc": 10,                     // optional: minimum headcount
+            "filter_cc2": ["es", "fr", "de"]     // optional: country codes
+        }
         """
-        lookalikes = await lookalike_from_ids(query)
+        company_ids = payload.get('company_ids', [])
+        filter_hc = payload.get('filter_hc')
+        filter_cc2 = payload.get('filter_cc2')
+        
+        # Convert company_ids list to comma-separated string for the helper function
+        query = ','.join(str(id) for id in company_ids) if company_ids else ''
+        
+        lookalikes = await lookalike_from_ids(query, filter_hc, filter_cc2)
         return JSONResponse(content=lookalikes)
 
     # -------------------------------------------------------------------------

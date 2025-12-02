@@ -240,7 +240,7 @@ class handler(BaseHTTPRequestHandler):
                         },
                         {
                             "name": "lookalike_from_ids",
-                            "description": "Find similar/lookalike companies based on a list of known company IDs. Returns companies with similar profiles to the input companies.",
+                            "description": "Find similar/lookalike companies based on a list of known company IDs. Returns companies with similar profiles to the input companies. Supports optional filters for headcount and country.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -248,6 +248,15 @@ class handler(BaseHTTPRequestHandler):
                                         "type": "array",
                                         "description": "List of company IDs (comp_id) to find lookalikes for",
                                         "items": {"type": "integer"}
+                                    },
+                                    "filter_hc": {
+                                        "type": "integer",
+                                        "description": "Minimum headcount filter - only return companies with headcount >= this value (optional)"
+                                    },
+                                    "filter_cc2": {
+                                        "type": "array",
+                                        "description": "Country code filter (ISO 2-letter codes) - only return companies in these countries (optional, e.g. ['es', 'fr', 'de'])",
+                                        "items": {"type": "string"}
                                     }
                                 },
                                 "required": ["company_ids"]
@@ -310,9 +319,19 @@ class handler(BaseHTTPRequestHandler):
                 }
             elif tool_name == "lookalike_from_ids":
                 company_ids = args.get("company_ids", [])
-                # API expects comma-separated string of IDs
-                query_string = ",".join(str(id) for id in company_ids) if company_ids else ""
-                result = call_companyprospect_api_get("/v01/lookalike_from_ids", {"query": query_string}, api_key)
+                filter_hc = args.get("filter_hc")
+                filter_cc2 = args.get("filter_cc2")
+                
+                # Build request body
+                body = {"company_ids": company_ids}
+                
+                # Add optional filters
+                if filter_hc is not None:
+                    body["filter_hc"] = filter_hc
+                if filter_cc2:
+                    body["filter_cc2"] = filter_cc2
+                
+                result = call_companyprospect_api_post("/v01/lookalike_from_ids", body, api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
