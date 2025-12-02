@@ -215,17 +215,17 @@ def fastapi_app():
         return [{'query': q, 'result': r} for q, r in zip(query, results)]
 
 
-    async def lookalike_from_ids(query: str, filter_hc: Optional[int] = None, filter_cc2: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def lookalike_from_ids(
+        company_ids: List[int],
+        filter_hc: Optional[int] = None,
+        filter_cc2: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
         """Query ClickHouse for lookalike companies for a list of comp_id with optional filters"""
-        if not query:
-            return {'columns': [], 'rows': []}
-
-        query_list = [int(s.strip()) for s in query.split(',') if s.strip().isdigit()]
-        if not query_list:
+        if not company_ids:
             return {'columns': [], 'rows': []}
         
         # Build query variables with optional filters
-        query_variables = {'query': query_list}
+        query_variables = {'query': company_ids}
         
         # Add headcount filter (default to 0 if not provided)
         query_variables['filter_hc'] = filter_hc if filter_hc is not None else 0
@@ -251,7 +251,7 @@ def fastapi_app():
                 'columns': [col['name'] for col in result.get('meta', [])],
                 'rows': result.get('data', [])
             }
-        return {'query': query, 'error': f'Status {response.status_code}'}
+        return {'company_ids': company_ids, 'error': f'Status {response.status_code}'}
 
 
 
@@ -355,10 +355,7 @@ def fastapi_app():
         filter_hc = payload.get('filter_hc')
         filter_cc2 = payload.get('filter_cc2')
         
-        # Convert company_ids list to comma-separated string for the helper function
-        query = ','.join(str(id) for id in company_ids) if company_ids else ''
-        
-        lookalikes = await lookalike_from_ids(query, filter_hc, filter_cc2)
+        lookalikes = await lookalike_from_ids(company_ids, filter_hc, filter_cc2)
         return JSONResponse(content=lookalikes)
 
     # -------------------------------------------------------------------------
