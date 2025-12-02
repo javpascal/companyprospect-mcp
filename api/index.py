@@ -7,7 +7,7 @@ import base64
 import sys
 
 # API configuration
-API_URL = os.environ.get("API_URL", "https://api.nummary.co")
+API_URL = os.environ.get("API_URL", "https://api.companyprospect.com")
 FALLBACK_API_KEY=''
 
 class handler(BaseHTTPRequestHandler):
@@ -173,7 +173,7 @@ class handler(BaseHTTPRequestHandler):
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {}, "prompts": {}},
-                    "serverInfo": {"name": "nummary-mcp", "version": "1.0.0"}
+                    "serverInfo": {"name": "companyprospect-mcp", "version": "1.0.0"}
                 }
             }
         # Handle notifications/initialized
@@ -187,37 +187,70 @@ class handler(BaseHTTPRequestHandler):
                 "result": {
                     "tools": [
                         {
-                            "name": "company_typeahead",
-                            "description": "Search for companies by name",
+                            "name": "lookup",
+                            "description": "Quick company typeahead - returns top 10 autocompleted companies ranked by relevance to the search query",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "query": {"type": "string", "description": "Search term"}
+                                    "query": {"type": "string", "description": "Company name or search term"}
                                 },
                                 "required": ["query"]
                             }
                         },
                         {
-                            "name": "find_competitors",
-                            "description": "Find competitors based on companies and keywords",
+                            "name": "lookup_many",
+                            "description": "Async company typeahead for multiple search terms - returns top 10 autocompleted companies per search term, ranked by relevance",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "context": {
+                                    "queries": {
                                         "type": "array",
-                                        "description": "List of companies and keywords",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "type": {"type": "string", "enum": ["company", "keyword"]},
-                                                "id": {"type": "integer"},
-                                                "text": {"type": "string"}
-                                            },
-                                            "required": ["type", "text"]
-                                        }
+                                        "description": "List of search terms/keywords",
+                                        "items": {"type": "string"}
                                     }
                                 },
-                                "required": ["context"]
+                                "required": ["queries"]
+                            }
+                        },
+                        {
+                            "name": "embed_many",
+                            "description": "Generate semantic embeddings (768-dim vectors) for a list of text inputs. Useful for similarity comparisons, clustering, or search applications.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "inputs": {
+                                        "type": "array",
+                                        "description": "List of text strings to embed (company names, descriptions, keywords)",
+                                        "items": {"type": "string"}
+                                    }
+                                },
+                                "required": ["inputs"]
+                            }
+                        },
+                        {
+                            "name": "lookalike_from_term",
+                            "description": "Find similar/lookalike companies based on a search term or description. Uses semantic embeddings to find companies with similar characteristics.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {"type": "string", "description": "Search term or description to find similar companies (e.g., 'enterprise SaaS', 'fintech payments')"}
+                                },
+                                "required": ["query"]
+                            }
+                        },
+                        {
+                            "name": "lookalike_from_ids",
+                            "description": "Find similar/lookalike companies based on a list of known company IDs. Returns companies with similar profiles to the input companies.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "company_ids": {
+                                        "type": "array",
+                                        "description": "List of company IDs (comp_id) to find lookalikes for",
+                                        "items": {"type": "integer"}
+                                    }
+                                },
+                                "required": ["company_ids"]
                             }
                         }
                     ]
@@ -233,9 +266,9 @@ class handler(BaseHTTPRequestHandler):
             
             print(f"[DEBUG] Tool call: {tool_name}, API key present: {bool(api_key)}", file=sys.stderr)
             
-            if tool_name == "company_typeahead":
+            if tool_name == "lookup":
                 query = args.get("query", "")
-                result = call_nummary_api("/app/type/company", {"query": query.strip()}, api_key)
+                result = call_companyprospect_api_get("/v01/lookup", {"query": query.strip()}, api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -243,9 +276,43 @@ class handler(BaseHTTPRequestHandler):
                         "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
                     }
                 }
-            elif tool_name == "find_competitors":
-                context = args.get("context", [])
-                result = call_nummary_api("/app/naturalsearch", {"context": context}, api_key)
+            elif tool_name == "lookup_many":
+                queries = args.get("queries", [])
+                result = call_companyprospect_api_post("/v01/lookup_many", {"queries": queries}, api_key)
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
+                    }
+                }
+            elif tool_name == "embed_many":
+                inputs = args.get("inputs", [])
+                # API expects comma-separated string for query param
+                query_string = ",".join(inputs) if inputs else ""
+                result = call_companyprospect_api_get("/v01/embed_many", {"query": query_string}, api_key)
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
+                    }
+                }
+            elif tool_name == "lookalike_from_term":
+                query = args.get("query", "")
+                result = call_companyprospect_api_get("/v01/lookalike_from_term", {"query": query.strip()}, api_key)
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
+                    }
+                }
+            elif tool_name == "lookalike_from_ids":
+                company_ids = args.get("company_ids", [])
+                # API expects comma-separated string of IDs
+                query_string = ",".join(str(id) for id in company_ids) if company_ids else ""
+                result = call_companyprospect_api_get("/v01/lookalike_from_ids", {"query": query_string}, api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -275,7 +342,8 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(response).encode())
         return
 
-def call_nummary_api(endpoint, body, api_key=None):
+def _check_api_key(api_key):
+    """Check if API key is present and return error dict if not."""
     if not api_key:
         return {
             "error": "Authentication required",
@@ -286,6 +354,39 @@ def call_nummary_api(endpoint, body, api_key=None):
             ],
             "troubleshooting": "Check Vercel logs for [DEBUG] messages to see what's being received"
         }
+    return None
+
+def call_companyprospect_api_get(endpoint, params, api_key=None):
+    """Call CompanyProspect API using GET method with query parameters."""
+    auth_error = _check_api_key(api_key)
+    if auth_error:
+        return auth_error
+    
+    try:
+        url = f"{API_URL}{endpoint}"
+        headers = {
+            "X-Api-Key": api_key,
+            "Accept": "application/json"
+        }
+        response = requests.get(url, headers=headers, params=params)
+        if response.ok:
+            return response.json()
+        else:
+            print(f"[DEBUG] CompanyProspect API error: {response.status_code}", file=sys.stderr)
+            return {
+                "error": f"API error: {response.status_code}",
+                "message": response.text,
+                "hint": "Check if your API Key is valid"
+            }
+    except Exception as e:
+        print(f"[DEBUG] CompanyProspect API exception: {str(e)}", file=sys.stderr)
+        return {"error": "API call failed", "message": str(e)}
+
+def call_companyprospect_api_post(endpoint, body, api_key=None):
+    """Call CompanyProspect API using POST method with JSON body."""
+    auth_error = _check_api_key(api_key)
+    if auth_error:
+        return auth_error
     
     try:
         url = f"{API_URL}{endpoint}"
@@ -298,12 +399,12 @@ def call_nummary_api(endpoint, body, api_key=None):
         if response.ok:
             return response.json()
         else:
-            print(f"[DEBUG] Nummary API error: {response.status_code}", file=sys.stderr)
+            print(f"[DEBUG] CompanyProspect API error: {response.status_code}", file=sys.stderr)
             return {
                 "error": f"API error: {response.status_code}",
                 "message": response.text,
                 "hint": "Check if your API Key is valid"
             }
     except Exception as e:
-        print(f"[DEBUG] Nummary API exception: {str(e)}", file=sys.stderr)
+        print(f"[DEBUG] CompanyProspect API exception: {str(e)}", file=sys.stderr)
         return {"error": "API call failed", "message": str(e)}

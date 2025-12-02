@@ -1,6 +1,6 @@
-# Nummary MCP Server
+# CompanyProspect MCP Server
 
-A Model Context Protocol (MCP) server for the Nummary API where each user provides their own API Key.
+A Model Context Protocol (MCP) server for the CompanyProspect API where each user provides their own API Key.
 
 ## Setup for Claude Desktop
 
@@ -12,9 +12,9 @@ Since Claude Desktop doesn't properly pass URL query parameters through SSE conn
 git push origin main
 ```
 
-### 2. Get Your Nummary Key
+### 2. Get Your CompanyProspect Key
 
-Log in to [Nummary](https://app.nummary.co/login/) and run this in browser console:
+Log in to [CompanyProspect](https://companyprospect.co/account) and run this in browser console:
 ```javascript
 document.cookie.split(';').find(c => c.trim().startsWith('AUTH_API_KEY='))?.split('=')[1]
 ```
@@ -31,14 +31,14 @@ Add your configuration with your API Key **in the URL path**:
 ```json
 {
   "mcpServers": {
-    "nummary": {
+    "companyprospect": {
       "url": "https://companyprospect-mcp.vercel.app/abcd123xxx"
     }
   }
 }
 ```
 
-Replace `abcd123xxx` with your actual full Nummary API Key.
+Replace `abcd123xxx` with your actual full CompanyProspect API Key.
 
 ### 4. Restart Claude Desktop
 
@@ -91,7 +91,7 @@ If using Claude in a web browser instead of desktop app, try:
 ```json
 {
   "mcpServers": {
-    "nummary": {
+    "companyprospect": {
       "url": "https://companyprospect-mcp.vercel.app?api_key=abcd123xxx"
     }
   }

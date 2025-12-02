@@ -8,7 +8,7 @@ Try this configuration with your API Key in the URL:
 ```json
 {
   "mcpServers": {
-    "nummary": {
+    "companyprospect": {
       "url": "https://companyprospect-mcp.vercel.app/abcd123xxx"
     }
   }
@@ -31,4 +31,4 @@ This is why setting the API Key in Vercel environment variables is the most reli
 
 
 ## Troubleshooting
-1. Email hello@nummary.co
+1. Email hello@companyprospect.com
