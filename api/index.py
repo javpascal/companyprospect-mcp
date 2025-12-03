@@ -233,7 +233,11 @@ class handler(BaseHTTPRequestHandler):
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "query": {"type": "string", "description": "Search term or description to find similar companies (e.g., 'enterprise SaaS', 'fintech payments')"}
+                                    "query": {"type": "string", "description": "Search term or description to find similar companies (e.g., 'enterprise SaaS', 'fintech payments')"},
+                                    "size_weight": {
+                                        "type": "number",
+                                        "description": "Bias toward larger companies (0.0-0.3, default 0.20). 0.0 = pure similarity (no size bias), 0.0-0.1 = light bias, 0.1-0.2 = pronounced bias, 0.2-0.3 = heavy bias"
+                                    }
                                 },
                                 "required": ["query"]
                             }
@@ -257,6 +261,10 @@ class handler(BaseHTTPRequestHandler):
                                         "type": "array",
                                         "description": "Country code filter (ISO 2-letter codes) - only return companies in these countries (optional, e.g. ['es', 'fr', 'de'])",
                                         "items": {"type": "string"}
+                                    },
+                                    "size_weight": {
+                                        "type": "number",
+                                        "description": "Bias toward larger companies (0.0-0.3, default 0.20). 0.0 = pure similarity (no size bias), 0.0-0.1 = light bias, 0.1-0.2 = pronounced bias, 0.2-0.3 = heavy bias"
                                     }
                                 },
                                 "required": ["company_ids"]
@@ -309,7 +317,14 @@ class handler(BaseHTTPRequestHandler):
                 }
             elif tool_name == "lookalike_from_term":
                 query = args.get("query", "")
-                result = call_companyprospect_api_get("/v01/lookalike_from_term", {"query": query.strip()}, api_key)
+                size_weight = args.get("size_weight")
+                
+                # Build request body
+                body = {"query": query.strip()}
+                if size_weight is not None:
+                    body["size_weight"] = size_weight
+                
+                result = call_companyprospect_api_post("/v01/lookalike_from_term", body, api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -321,6 +336,7 @@ class handler(BaseHTTPRequestHandler):
                 company_ids = args.get("company_ids", [])
                 filter_hc = args.get("filter_hc")
                 filter_cc2 = args.get("filter_cc2")
+                size_weight = args.get("size_weight")
                 
                 # Build request body
                 body = {"company_ids": company_ids}
@@ -330,6 +346,8 @@ class handler(BaseHTTPRequestHandler):
                     body["filter_hc"] = filter_hc
                 if filter_cc2:
                     body["filter_cc2"] = filter_cc2
+                if size_weight is not None:
+                    body["size_weight"] = size_weight
                 
                 result = call_companyprospect_api_post("/v01/lookalike_from_ids", body, api_key)
                 response = {

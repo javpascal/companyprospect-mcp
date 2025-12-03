@@ -218,14 +218,31 @@ def fastapi_app():
     async def lookalike_from_ids(
         company_ids: List[int],
         filter_hc: Optional[int] = None,
-        filter_cc2: Optional[List[str]] = None
+        filter_cc2: Optional[List[str]] = None,
+        size_weight: float = 0.20
     ) -> Dict[str, Any]:
-        """Query ClickHouse for lookalike companies for a list of comp_id with optional filters"""
+        """
+        Query ClickHouse for lookalike companies for a list of comp_id with optional filters.
+        
+        Args:
+            company_ids: List of company IDs to find lookalikes for
+            filter_hc: Minimum headcount filter (optional)
+            filter_cc2: Country code filter list (optional)
+            size_weight: Bias toward larger companies (0.0 - 0.3, default 0.20)
+                - 0.0       = pure similarity search (no size bias)
+                - 0.0 - 0.1 = light size bias
+                - 0.1 - 0.2 = pronounced size bias
+                - 0.2 - 0.3 = heavy size bias
+        """
         if not company_ids:
             return {'columns': [], 'rows': []}
         
         # Build query variables with optional filters
-        query_variables = {'query': company_ids}
+        query_variables = {
+            'company_ids': company_ids,
+            'max_log_hc': 6.0,
+            'size_weight': size_weight,
+        }
         
         # Add headcount filter (default to 0 if not provided)
         query_variables['filter_hc'] = filter_hc if filter_hc is not None else 0
@@ -251,13 +268,29 @@ def fastapi_app():
                 'columns': [col['name'] for col in result.get('meta', [])],
                 'rows': result.get('data', [])
             }
-        return {'company_ids': company_ids, 'error': f'Status {response.status_code}'}
+        # Debug: return full error details
+        return {
+            'company_ids': company_ids,
+            'error': f'Status {response.status_code}',
+            'detail': response.text[:500] if response.text else 'No response body',
+            'query_variables': query_variables
+        }
 
 
 
 
-    async def lookalike_from_term(query: str) -> Dict[str, Any]:
-        """Query ClickHouse for lookalike companies for a single term"""
+    async def lookalike_from_term(query: str, size_weight: float = 0.20) -> Dict[str, Any]:
+        """
+        Query ClickHouse for lookalike companies for a single term.
+        
+        Args:
+            query: Search term to find similar companies
+            size_weight: Bias toward larger companies (0.0 - 0.3, default 0.20)
+                - 0.0       = pure similarity search (no size bias)
+                - 0.0 - 0.1 = light size bias
+                - 0.1 - 0.2 = pronounced size bias
+                - 0.2 - 0.3 = heavy size bias
+        """
         if not query:
             return {'columns': [], 'rows': []}
 
@@ -273,7 +306,13 @@ def fastapi_app():
                     'x-clickhouse-endpoint-version': '2',
                 },
                 auth=(CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET),
-                json={'queryVariables': {'query': query_emb}}
+                json={
+                    'queryVariables': {
+                        'query': query_emb,
+                        'max_log_hc': 6.0,
+                        'size_weight': size_weight,
+                    }
+                }
             )
             
         if response.status_code == 200:
@@ -328,15 +367,28 @@ def fastapi_app():
     # ENDPOINTS: Lookalikes
     # -------------------------------------------------------------------------
 
-    @web_app.get("/v01/lookalike_from_term")
-    async def api_lookalike_from_term(query: str):
+    @web_app.post("/v01/lookalike_from_term")
+    async def api_lookalike_from_term(payload: Dict[str, Any]):
         """
         Generate lookalikes for a single term.
         
-        Query param: query="term"
+        Request body:
+        {
+            "query": "term",                   // required: search term
+            "size_weight": 0.20                // optional: size weight (default 0.20, ranges 0.0 - 0.3)
+        }
+        
+        size_weight controls the bias toward larger companies in the results:
+          - 0.0       = pure similarity search (no size bias)
+          - 0.0 - 0.1 = light size bias
+          - 0.1 - 0.2 = pronounced size bias
+          - 0.2 - 0.3 = heavy size bias
         """
-        lookalikes = await lookalike_from_term(query)
+        query = payload.get('query', '')
+        size_weight = payload.get('size_weight', 0.20)
+        lookalikes = await lookalike_from_term(query, size_weight)
         return JSONResponse(content=lookalikes)
+
 
 
     @web_app.post("/v01/lookalike_from_ids")
@@ -349,13 +401,21 @@ def fastapi_app():
             "company_ids": [10667, 12345],      // required: list of comp_ids
             "filter_hc": 10,                     // optional: minimum headcount
             "filter_cc2": ["es", "fr", "de"]     // optional: country codes
+            "size_weight": 0.15,                 // optional: size weight (default 0.15, ranges 0.0 - 0.3)
         }
+        
+        size_weight controls the bias toward larger companies in the results:
+          - 0.0       = pure similarity search (no size bias)
+          - 0.0 - 0.1 = light size bias
+          - 0.1 - 0.2 = pronounced size bias
+          - 0.2 - 0.3 = heavy size bias
         """
         company_ids = payload.get('company_ids', [])
         filter_hc = payload.get('filter_hc')
         filter_cc2 = payload.get('filter_cc2')
-        
-        lookalikes = await lookalike_from_ids(company_ids, filter_hc, filter_cc2)
+        size_weight = payload.get('size_weight', 0.15)
+
+        lookalikes = await lookalike_from_ids(company_ids, filter_hc, filter_cc2, size_weight)
         return JSONResponse(content=lookalikes)
 
     # -------------------------------------------------------------------------
