@@ -43,7 +43,7 @@ async def lookalike_from_ids(
             - 0.0 - 0.1 = light size bias
             - 0.1 - 0.2 = pronounced size bias
             - 0.2 - 0.3 = heavy size bias
-        limit: Maximum number of results to return (default 100)
+        limit: Maximum number of results to return (default 100, max 1000)
     
     Returns:
         Dict with 'columns' and 'rows' (limited to `limit` rows)
@@ -75,9 +75,10 @@ async def lookalike_from_ids(
     if response.status_code == 200:
         result = response.json()
         rows = result.get('data', [])
+        capped_limit = min(limit, 1000)  # Cap at 1000
         return {
             'columns': [col['name'] for col in result.get('meta', [])],
-            'rows': rows[:limit]  # Apply limit
+            'rows': rows[:capped_limit]
         }
     
     return {
@@ -109,7 +110,7 @@ async def lookalike_from_term(
             - 0.0 - 0.1 = light size bias
             - 0.1 - 0.2 = pronounced size bias
             - 0.2 - 0.3 = heavy size bias
-        limit: Maximum number of results to return (default 100)
+        limit: Maximum number of results to return (default 100, max 1000)
     
     Returns:
         Dict with 'columns' and 'rows' (limited to `limit` rows)
@@ -141,9 +142,10 @@ async def lookalike_from_term(
     if response.status_code == 200:
         result = response.json()
         rows = result.get('data', [])
+        capped_limit = min(limit, 1000)  # Cap at 1000
         return {
             'columns': [col['name'] for col in result.get('meta', [])],
-            'rows': rows[:limit]  # Apply limit
+            'rows': rows[:capped_limit]
         }
     
     return {'query': query, 'error': f'Status {response.status_code}'}

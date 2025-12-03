@@ -188,18 +188,19 @@ class handler(BaseHTTPRequestHandler):
                     "tools": [
                         {
                             "name": "lookup",
-                            "description": "Quick company typeahead - returns top 10 autocompleted companies ranked by relevance to the search query",
+                            "description": "Quick company typeahead - returns autocompleted companies ranked by relevance to the search query",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
-                                    "query": {"type": "string", "description": "Company name or search term"}
+                                    "query": {"type": "string", "description": "Company name or search term"},
+                                    "limit": {"type": "integer", "description": "Maximum results to return (default 10, max 100)"}
                                 },
                                 "required": ["query"]
                             }
                         },
                         {
                             "name": "lookup_many",
-                            "description": "Async company typeahead for multiple search terms - returns top 10 autocompleted companies per search term, ranked by relevance",
+                            "description": "Async company typeahead for multiple search terms - returns autocompleted companies per search term, deduplicated by company ID",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -207,7 +208,8 @@ class handler(BaseHTTPRequestHandler):
                                         "type": "array",
                                         "description": "List of search terms/keywords",
                                         "items": {"type": "string"}
-                                    }
+                                    },
+                                    "limit": {"type": "integer", "description": "Maximum results per query (default 10, max 100)"}
                                 },
                                 "required": ["queries"]
                             }
@@ -237,7 +239,8 @@ class handler(BaseHTTPRequestHandler):
                                     "size_weight": {
                                         "type": "number",
                                         "description": "Bias toward larger companies (0.0-0.3, default 0.20). 0.0 = pure similarity (no size bias), 0.0-0.1 = light bias, 0.1-0.2 = pronounced bias, 0.2-0.3 = heavy bias"
-                                    }
+                                    },
+                                    "limit": {"type": "integer", "description": "Maximum results to return (default 100, max 1000)"}
                                 },
                                 "required": ["query"]
                             }
@@ -265,9 +268,24 @@ class handler(BaseHTTPRequestHandler):
                                     "size_weight": {
                                         "type": "number",
                                         "description": "Bias toward larger companies (0.0-0.3, default 0.20). 0.0 = pure similarity (no size bias), 0.0-0.1 = light bias, 0.1-0.2 = pronounced bias, 0.2-0.3 = heavy bias"
-                                    }
+                                    },
+                                    "limit": {"type": "integer", "description": "Maximum results to return (default 100, max 1000)"}
                                 },
                                 "required": ["company_ids"]
+                            }
+                        },
+                        {
+                            "name": "parse_query",
+                            "description": "Parse a natural language query into structured JSON for company searches. Extracts industry summary, competitor IDs, filters (headcount, country, job titles), and finds similar companies via semantic search.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {
+                                        "type": "string",
+                                        "description": "Natural language query (e.g., 'startups en online payments en españa con >10 empleados, similar a Stripe')"
+                                    }
+                                },
+                                "required": ["query"]
                             }
                         }
                     ]
@@ -285,7 +303,8 @@ class handler(BaseHTTPRequestHandler):
             
             if tool_name == "lookup":
                 query = args.get("query", "")
-                result = call_companyprospect_api_get("/v01/lookup", {"query": query.strip()}, api_key)
+                limit = args.get("limit", 10)
+                result = call_companyprospect_api_get("/v01/lookup", {"query": query.strip(), "limit": limit}, api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -295,7 +314,8 @@ class handler(BaseHTTPRequestHandler):
                 }
             elif tool_name == "lookup_many":
                 queries = args.get("queries", [])
-                result = call_companyprospect_api_post("/v01/lookup_many", {"queries": queries}, api_key)
+                limit = args.get("limit", 10)
+                result = call_companyprospect_api_post("/v01/lookup_many", {"queries": queries, "limit": limit}, api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -318,11 +338,14 @@ class handler(BaseHTTPRequestHandler):
             elif tool_name == "lookalike_from_term":
                 query = args.get("query", "")
                 size_weight = args.get("size_weight")
+                limit = args.get("limit")
                 
                 # Build request body
                 body = {"query": query.strip()}
                 if size_weight is not None:
                     body["size_weight"] = size_weight
+                if limit is not None:
+                    body["limit"] = limit
                 
                 result = call_companyprospect_api_post("/v01/lookalike_from_term", body, api_key)
                 response = {
@@ -337,6 +360,7 @@ class handler(BaseHTTPRequestHandler):
                 filter_hc = args.get("filter_hc")
                 filter_cc2 = args.get("filter_cc2")
                 size_weight = args.get("size_weight")
+                limit = args.get("limit")
                 
                 # Build request body
                 body = {"company_ids": company_ids}
@@ -348,8 +372,21 @@ class handler(BaseHTTPRequestHandler):
                     body["filter_cc2"] = filter_cc2
                 if size_weight is not None:
                     body["size_weight"] = size_weight
+                if limit is not None:
+                    body["limit"] = limit
                 
                 result = call_companyprospect_api_post("/v01/lookalike_from_ids", body, api_key)
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
+                    }
+                }
+            elif tool_name == "parse_query":
+                query = args.get("query", "")
+                
+                result = call_companyprospect_api_post("/v01/parse_query", {"query": query}, api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
