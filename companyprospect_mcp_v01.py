@@ -96,6 +96,7 @@ python_image = (
     )
     .env({"HF_HUB_CACHE": MODEL_DIR})
     .add_local_python_source("_remote_module_non_scriptable")
+    .add_local_python_source("api_modules")
 )
 
 
@@ -166,308 +167,94 @@ class GPUEmbedder:
 # API FUNCTION
 # =============================================================================
 
-# =============================================================================
-# REPORT GENERATOR (Long-running task)
-# =============================================================================
-
-S3_BUCKET = 'companyprospect'
-S3_PREFIX = 'reports'
-
-# TODO: Replace with actual ClickHouse endpoint UUID once created
-CLICKHOUSE_REPORT_ENDPOINT = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
-
 @app.function(
     image=python_image,
-    timeout=600,  # 10 minutes max
+    timeout=600,  # 10 minutes for long-running reports
+    min_containers=1,
     secrets=[
         Secret.from_name("secrets_clickhouse_api"),
         Secret.from_name("my-aws-secret"),
+        Secret.from_name("secrets_openai"),  # Needs: openai_key
     ],
-    region='us-east',
-)
-def generate_report(
-    report_id: str,
-    query_variables: Dict[str, Any],
-    file_format: str = 'json',
-    clickhouse_endpoint: str = None
-) -> Dict[str, Any]:
-    """
-    Generate a report from ClickHouse and upload to S3.
-    
-    Args:
-        report_id: Unique identifier for the report
-        query_variables: Variables to pass to the query
-        file_format: Output format ('json' or 'csv')
-        clickhouse_endpoint: ClickHouse Cloud endpoint UUID (optional, uses default)
-    
-    Returns:
-        Dict with 'url' (presigned S3 URL) and 'report_id'
-    """
-    import boto3
-    import requests
-    from datetime import datetime
-    
-    clickhouse_key_id = os.environ.get('key_id', 'NOT_FOUND')
-    clickhouse_key_secret = os.environ.get('key_secret', 'NOT_FOUND')
-    
-    # Use default endpoint if not provided
-    endpoint = clickhouse_endpoint or CLICKHOUSE_REPORT_ENDPOINT
-    
-    # 1. Query ClickHouse (or use mock data if placeholder endpoint)
-    if endpoint == 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx':
-        # TODO: Remove mock data once real endpoint is configured
-        columns = ['comp_id', 'name', 'domain', 'headcount', 'country']
-        rows = [
-            [1, 'Mock Company A', 'mock-a.com', 100, 'US'],
-            [2, 'Mock Company B', 'mock-b.com', 250, 'ES'],
-            [3, 'Mock Company C', 'mock-c.com', 50, 'FR'],
-        ]
-    else:
-        response = requests.post(
-            f'https://queries.clickhouse.cloud/run/{endpoint}',
-            params={'format': 'JSONCompact'},
-            headers={
-                'Content-Type': 'application/json',
-                'x-clickhouse-endpoint-version': '2',
-            },
-            auth=(clickhouse_key_id, clickhouse_key_secret),
-            json={'queryVariables': query_variables},
-            timeout=540  # 9 minutes
-        )
-        
-        if response.status_code != 200:
-            return {
-                'error': f'ClickHouse error: {response.status_code}',
-                'detail': response.text[:500] if response.text else 'No response body',
-                'report_id': report_id
-            }
-        
-        result = response.json()
-        columns = [col['name'] for col in result.get('meta', [])]
-        rows = result.get('data', [])
-    
-    # 2. Format data
-    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-    
-    if file_format == 'csv':
-        import csv
-        import io
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(columns)
-        writer.writerows(rows)
-        content = output.getvalue()
-        file_ext = 'csv'
-    else:  # json
-        content = json.dumps({'columns': columns, 'rows': rows}, ensure_ascii=False)
-        file_ext = 'json'
-    
-    # 3. Upload to S3: numerau-scraping/companyprospect/reports/{report_id}/{timestamp}.{ext}
-    s3_key = f'{S3_PREFIX}/{report_id}/{timestamp}.{file_ext}'
-    s3_client = boto3.client('s3')
-    s3_client.put_object(Body=content, Bucket=S3_BUCKET, Key=s3_key)
-    
-    # 4. Generate presigned URL (7 days expiration)
-    presigned_url = s3_client.generate_presigned_url(
-        'get_object',
-        Params={'Bucket': S3_BUCKET, 'Key': s3_key},
-        ExpiresIn=7 * 24 * 60 * 60  # 7 days in seconds
-    )
-    
-    return {
-        'report_id': report_id,
-        'url': presigned_url,
-        'rows_count': len(rows),
-        'file_format': file_format,
-        'expires_in_days': 7
-    }
-
-
-# =============================================================================
-# API FUNCTION
-# =============================================================================
-
-@app.function(
-    image=python_image,
-    min_containers=1,
-    secrets=[Secret.from_name("secrets_clickhouse_api")],
     region='us-east',
 )
 @asgi_app(custom_domains=["api.companyprospect.com"])
 def fastapi_app():
     """Main FastAPI application with all endpoints."""
+    from api_modules import reports, query_parser, lookups, lookalikes
     
     # Initialize services
     embedder = GPUEmbedder()
     CLICKHOUSE_KEY_ID = os.environ.get('key_id', 'NOT_FOUND')
     CLICKHOUSE_KEY_SECRET = os.environ.get('key_secret', 'NOT_FOUND')
+    OPENAI_API_KEY = os.environ.get('openai_key', 'NOT_FOUND')
 
     # -------------------------------------------------------------------------
     # HELPER FUNCTIONS
     # -------------------------------------------------------------------------
 
-    async def lookup(query: str) -> Dict[str, Any]:
-        """Query ClickHouse for a single lookup."""
-        if not query:
-            return {'columns': [], 'rows': []}
-
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                'https://queries.clickhouse.cloud/run/679eff13-08ef-48ef-9e6d-e1dd15a9d151',
-                params={'format': 'JSONCompact', 'param_query': query},
-                headers={'Content-Type': 'application/json'},
-                auth=(CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET)
-            )
-            
-        if response.status_code == 200:
-            result = response.json()
-            return {
-                'columns': [col['name'] for col in result.get('meta', [])],
-                'rows': result.get('data', [])
-            }
-        return {'query': query, 'error': f'Status {response.status_code}'}
-
-
-    async def lookup_many(query: List[str]) -> List[Dict[str, Any]]:
-        """Run multiple lookups concurrently."""
-        if not query:
-            return []
-        tasks = [lookup(q) for q in query]
-        results = await asyncio.gather(*tasks)
-        return [{'query': q, 'result': r} for q, r in zip(query, results)]
-
-
+    # -------------------------------------------------------------------------
+    # HELPER WRAPPERS (use api_modules with credentials)
+    # -------------------------------------------------------------------------
+    
+    async def lookup(query: str, limit: int = 10) -> Dict[str, Any]:
+        """Wrapper for lookups.lookup with credentials."""
+        return await lookups.lookup(query, CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET, limit)
+    
+    async def lookup_many(queries: List[str], limit: int = 10) -> List[Dict[str, Any]]:
+        """Wrapper for lookups.lookup_many with credentials."""
+        return await lookups.lookup_many(queries, CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET, limit)
+    
     async def lookalike_from_ids(
         company_ids: List[int],
         filter_hc: Optional[int] = None,
         filter_cc2: Optional[List[str]] = None,
-        size_weight: float = 0.20
+        size_weight: float = 0.20,
+        limit: int = 100
     ) -> Dict[str, Any]:
-        """
-        Query ClickHouse for lookalike companies for a list of comp_id with optional filters.
-        
-        Args:
-            company_ids: List of company IDs to find lookalikes for
-            filter_hc: Minimum headcount filter (optional)
-            filter_cc2: Country code filter list (optional)
-            size_weight: Bias toward larger companies (0.0 - 0.3, default 0.20)
-                - 0.0       = pure similarity search (no size bias)
-                - 0.0 - 0.1 = light size bias
-                - 0.1 - 0.2 = pronounced size bias
-                - 0.2 - 0.3 = heavy size bias
-        """
-        if not company_ids:
-            return {'columns': [], 'rows': []}
-        
-        # Build query variables with optional filters
-        query_variables = {
-            'company_ids': company_ids,
-            'max_log_hc': 6.0,
-            'size_weight': size_weight,
-        }
-        
-        # Add headcount filter (default to 0 if not provided)
-        query_variables['filter_hc'] = filter_hc if filter_hc is not None else 0
-        
-        # Add country filter (default to empty array if not provided)
-        query_variables['filter_cc2'] = filter_cc2 if filter_cc2 else []
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                'https://queries.clickhouse.cloud/run/140e404a-0b69-47e6-9432-6633bdd89ce5',
-                params={'format': 'JSONCompact'},
-                headers={
-                    'Content-Type': 'application/json',
-                    'x-clickhouse-endpoint-version': '2',
-                },
-                auth=(CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET),
-                json={'queryVariables': query_variables}
-            )
-            
-        if response.status_code == 200:
-            result = response.json()
-            return {
-                'columns': [col['name'] for col in result.get('meta', [])],
-                'rows': result.get('data', [])
-            }
-        # Debug: return full error details
-        return {
-            'company_ids': company_ids,
-            'error': f'Status {response.status_code}',
-            'detail': response.text[:500] if response.text else 'No response body',
-            'query_variables': query_variables
-        }
-
-
-
-
-    async def lookalike_from_term(query: str, size_weight: float = 0.20) -> Dict[str, Any]:
-        """
-        Query ClickHouse for lookalike companies for a single term.
-        
-        Args:
-            query: Search term to find similar companies
-            size_weight: Bias toward larger companies (0.0 - 0.3, default 0.20)
-                - 0.0       = pure similarity search (no size bias)
-                - 0.0 - 0.1 = light size bias
-                - 0.1 - 0.2 = pronounced size bias
-                - 0.2 - 0.3 = heavy size bias
-        """
-        if not query:
-            return {'columns': [], 'rows': []}
-
-        # Get embedding as list for queryVariables
-        query_emb = embedder.embed_inputs.remote([query])[0].tolist()
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                'https://queries.clickhouse.cloud/run/66327799-c11f-4777-8cac-09e4e359fbff',
-                params={'format': 'JSONCompact'},
-                headers={
-                    'Content-Type': 'application/json',
-                    'x-clickhouse-endpoint-version': '2',
-                },
-                auth=(CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET),
-                json={
-                    'queryVariables': {
-                        'query': query_emb,
-                        'max_log_hc': 6.0,
-                        'size_weight': size_weight,
-                    }
-                }
-            )
-            
-        if response.status_code == 200:
-            result = response.json()
-            return {
-                'columns': [col['name'] for col in result.get('meta', [])],
-                'rows': result.get('data', [])
-            }
-        return {'query': query, 'error': f'Status {response.status_code}'}
-
-        # Debug: print full error response
-        # print(f"ClickHouse Error {response.status_code}: {response.text}")
-        # return {'query': query, 'error': f'Status {response.status_code}', 'detail': response.text}
-        
+        """Wrapper for lookalikes.lookalike_from_ids with credentials."""
+        return await lookalikes.lookalike_from_ids(
+            company_ids, CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET,
+            filter_hc, filter_cc2, size_weight, limit
+        )
+    
+    async def lookalike_from_term(query: str, size_weight: float = 0.20, limit: int = 100) -> Dict[str, Any]:
+        """Wrapper for lookalikes.lookalike_from_term with credentials."""
+        return await lookalikes.lookalike_from_term(
+            query, CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET,
+            embedder.embed_inputs.remote, size_weight, limit
+        )
 
     # -------------------------------------------------------------------------
     # ENDPOINTS: Lookup
     # -------------------------------------------------------------------------
 
     @web_app.get("/v01/lookup")
-    async def api_lookup(query: str):
-        """Single query lookup."""
-        return JSONResponse(content=await lookup(query))
+    async def api_lookup(query: str, limit: int = 10):
+        """
+        Single query lookup.
+        
+        Query params:
+            query: Search term
+            limit: Maximum results (default 10)
+        """
+        return JSONResponse(content=await lookup(query, limit))
 
 
     @web_app.post("/v01/lookup_many")
-    async def api_lookup_many(payload: Dict[str, List[str]]):
+    async def api_lookup_many(payload: Dict[str, Any]):
         """
         Batch lookup for multiple queries.
         
-        Request body: {"queries": ["query1", "query2", ...]}
+        Request body: 
+        {
+            "queries": ["query1", "query2", ...],
+            "limit": 10  // optional, default 10
+        }
         """
-        return JSONResponse(content=await lookup_many(payload['queries']))
+        queries = payload.get('queries', [])
+        limit = payload.get('limit', 10)
+        return JSONResponse(content=await lookup_many(queries, limit))
 
     # -------------------------------------------------------------------------
     # ENDPOINTS: Embeddings
@@ -497,7 +284,8 @@ def fastapi_app():
         Request body:
         {
             "query": "term",                   // required: search term
-            "size_weight": 0.20                // optional: size weight (default 0.20, ranges 0.0 - 0.3)
+            "size_weight": 0.20,               // optional: size weight (default 0.20, ranges 0.0 - 0.3)
+            "limit": 100                       // optional: max results (default 100)
         }
         
         size_weight controls the bias toward larger companies in the results:
@@ -508,9 +296,9 @@ def fastapi_app():
         """
         query = payload.get('query', '')
         size_weight = payload.get('size_weight', 0.20)
-        lookalikes = await lookalike_from_term(query, size_weight)
-        return JSONResponse(content=lookalikes)
-
+        limit = payload.get('limit', 100)
+        result = await lookalike_from_term(query, size_weight, limit)
+        return JSONResponse(content=result)
 
 
     @web_app.post("/v01/lookalike_from_ids")
@@ -522,8 +310,9 @@ def fastapi_app():
         {
             "company_ids": [10667, 12345],      // required: list of comp_ids
             "filter_hc": 10,                     // optional: minimum headcount
-            "filter_cc2": ["es", "fr", "de"]     // optional: country codes
+            "filter_cc2": ["es", "fr", "de"],    // optional: country codes
             "size_weight": 0.15,                 // optional: size weight (default 0.15, ranges 0.0 - 0.3)
+            "limit": 100                         // optional: max results (default 100)
         }
         
         size_weight controls the bias toward larger companies in the results:
@@ -536,9 +325,10 @@ def fastapi_app():
         filter_hc = payload.get('filter_hc')
         filter_cc2 = payload.get('filter_cc2')
         size_weight = payload.get('size_weight', 0.15)
+        limit = payload.get('limit', 100)
 
-        lookalikes = await lookalike_from_ids(company_ids, filter_hc, filter_cc2, size_weight)
-        return JSONResponse(content=lookalikes)
+        result = await lookalike_from_ids(company_ids, filter_hc, filter_cc2, size_weight, limit)
+        return JSONResponse(content=result)
 
     # -------------------------------------------------------------------------
     # ENDPOINTS: Reports
@@ -586,13 +376,137 @@ def fastapi_app():
                 status_code=400
             )
         
-        # Call the long-running report generator
-        result = generate_report.remote(
+        # Call the report generator from reports module
+        result = reports.generate_report(
             report_id=report_id,
             query_variables=query_variables,
+            clickhouse_key_id=CLICKHOUSE_KEY_ID,
+            clickhouse_key_secret=CLICKHOUSE_KEY_SECRET,
             file_format=file_format,
             clickhouse_endpoint=clickhouse_endpoint
         )
+        
+        return JSONResponse(content=result)
+
+    # -------------------------------------------------------------------------
+    # ENDPOINTS: Query Parser
+    # -------------------------------------------------------------------------
+
+    @web_app.post("/v01/parse_query")
+    async def api_parse_query(payload: Dict[str, Any]):
+        """
+        Parse a natural language query into structured JSON for company searches.
+        
+        Request body:
+        {
+            "query": "startups en online payments en españa con >10 empleados"
+        }
+        
+        Returns:
+        {
+            "industry_summary": "Online payment fintech service providers",
+            "competitor_parsed_list": [10145, 9033],           // Explicit mentions resolved to IDs
+            "competitor_suggested_list": [10667, 4006],        // LLM-suggested companies
+            "industry_lookalikes_list": [12345, 67890, ...],   // Semantic search on industry_summary
+            "filt_lead_type": ["company"],
+            "filt_comp_cc2_list": ["es"],
+            "filt_comp_hc": [10, -1]
+        }
+        """
+        query = payload.get('query', '')
+        
+        if not query:
+            return JSONResponse(
+                content={'error': 'query is required'},
+                status_code=400
+            )
+        
+        # Call the query parser without lookup (returns names instead of IDs)
+        result = query_parser.parse_query(
+            query=query,
+            openai_api_key=OPENAI_API_KEY,
+            lookup_many_fn=None  # We'll do lookups async below
+        )
+        
+        # Check for errors
+        if 'error' in result:
+            return JSONResponse(content=result)
+        
+        # Resolve competitor names to IDs using async lookup_many with validation
+        competitor_names = result.pop('competitor_names', [])
+        suggested_names = result.pop('suggested_companies', [])
+        industry_context = result.get('industry_summary', '')
+        
+        result['competitor_parsed_list'] = []
+        result['competitor_suggested_list'] = []
+        
+        # Helper to validate and select best match from multiple candidates
+        def validate_company(search_term: str, rows: list, columns: list) -> int | None:
+            if not rows:
+                return None
+            if len(rows) == 1:
+                return int(rows[0][0])
+            
+            # Multiple candidates - use LLM to pick the right one
+            from openai import OpenAI
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            
+            # Format candidates for LLM
+            candidates_str = "\n".join([
+                f"- {row[0]}: {row[1] if len(row) > 1 else 'N/A'} | {row[2] if len(row) > 2 else 'N/A'} employees | {row[3] if len(row) > 3 else 'N/A'}"
+                for row in rows[:10]  # Limit to top 10
+            ])
+            
+            validation_prompt = f"""Select the correct company from these search results.
+
+Original query: {query}
+Industry: {industry_context}
+Search term: "{search_term}"
+
+Candidates (id: name | employees | country):
+{candidates_str}
+
+Return JSON: {{"comp_id": <best matching id or null>}}"""
+            
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": validation_prompt}],
+                    temperature=0,
+                    response_format={"type": "json_object"}
+                )
+                validation = json.loads(response.choices[0].message.content)
+                comp_id = validation.get('comp_id')
+                return int(comp_id) if comp_id else None
+            except:
+                return int(rows[0][0])  # Fallback to first
+        
+        if competitor_names:
+            lookup_results = await lookup_many(competitor_names)
+            for item in lookup_results:
+                res = item.get('result', {})
+                rows = res.get('rows', [])
+                columns = res.get('columns', [])
+                comp_id = validate_company(item.get('query', ''), rows, columns)
+                if comp_id:
+                    result['competitor_parsed_list'].append(comp_id)
+        
+        if suggested_names:
+            lookup_results = await lookup_many(suggested_names)
+            for item in lookup_results:
+                res = item.get('result', {})
+                rows = res.get('rows', [])
+                columns = res.get('columns', [])
+                comp_id = validate_company(item.get('query', ''), rows, columns)
+                if comp_id:
+                    result['competitor_suggested_list'].append(comp_id)
+        
+        # Get industry lookalikes using semantic search on industry_summary
+        result['industry_lookalikes_list'] = []
+        if industry_context:
+            lookalike_result = await lookalike_from_term(industry_context, size_weight=0.15, limit=20)
+            rows = lookalike_result.get('rows', [])
+            result['industry_lookalikes_list'] = [int(row[0]) for row in rows if rows]
         
         return JSONResponse(content=result)
 
