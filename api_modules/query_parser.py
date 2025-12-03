@@ -70,11 +70,12 @@ The user query can be in any language. Industry descriptions must be in English.
    - Include domain (.io, .com) or industry qualifier when the name is common
 3. suggested_companies: Think of 3-5 well-known companies that fit the industry description. Include both original and English names when applicable.
 4. filt_lead_type: Default to ["company"] unless employees/people are mentioned
-5. filt_comp_cc2_list: Expand regions, use lowercase ISO codes
+5. filt_comp_cc2_list: ONLY if location is explicitly mentioned. Expand regions, use lowercase ISO codes. DO NOT invent countries if not mentioned.
 6. filt_comp_hc: Use [min, max] format, -1 for no limit
 7. filt_emp_title: Expand titles if generic terms used
 8. filt_emp_cc2_list: Only if employee locations differ from company locations
-9. Omit fields that are not mentioned or not applicable (except industry_summary which is required)"""
+9. Omit fields that are not mentioned or not applicable (except industry_summary which is required)
+10. NEVER invent or assume data not present in the query. If no location mentioned, omit filt_comp_cc2_list entirely."""
 
 
 # =============================================================================

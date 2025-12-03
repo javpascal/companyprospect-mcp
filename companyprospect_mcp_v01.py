@@ -518,7 +518,8 @@ Return JSON: {{"comp_id": <best matching id or null>}}"""
         if industry_context:
             lookalike_result = await lookalike_from_term(industry_context, size_weight=0.15, limit=20)
             rows = lookalike_result.get('rows', [])
-            result['industry_lookalikes_list'] = [int(row[0]) for row in rows if rows]
+            if rows:
+                result['industry_lookalikes_list'] = [int(row[0]) for row in rows]
         
         return JSONResponse(content=result)
 
