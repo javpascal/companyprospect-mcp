@@ -63,6 +63,7 @@ async def lookup(
                     'query': query,
                     'max_log_hc': 6.0,
                     'size_weight': size_weight,
+                    'limit': min(limit, 100),
                 }
             }
         )

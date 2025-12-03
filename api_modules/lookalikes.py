@@ -60,6 +60,7 @@ async def lookalike_from_ids(
         'size_weight': size_weight,
         'filter_hc': filter_hc if filter_hc is not None else 0,
         'filter_cc2': filter_cc2 if filter_cc2 else [],
+        'limit': min(limit, 1000),
     }
     
     async with httpx.AsyncClient() as client:
@@ -137,6 +138,7 @@ async def lookalike_from_term(
                     'query': query_emb,
                     'max_log_hc': 6.0,
                     'size_weight': size_weight,
+                    'limit': min(limit, 1000),
                 }
             }
         )
