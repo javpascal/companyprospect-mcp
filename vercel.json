@@ -2,7 +2,7 @@
     "rewrites": [
         {
             "source": "/(.*)",
-            "destination": "/mcp/index.py"
+            "destination": "/api/index.py"
         }
     ],
     "headers": [
