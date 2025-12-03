@@ -2,6 +2,8 @@
 CompanyProspect Lookups Module
 ==============================
 Functions for looking up companies by name/query.
+
+Returns: comp_id, comp_slug, comp_name, comp_web, dist
 """
 
 import asyncio
@@ -24,7 +26,8 @@ async def lookup(
     query: str,
     clickhouse_key_id: str,
     clickhouse_key_secret: str,
-    limit: int = 10
+    limit: int = 10,
+    size_weight: float = 0.1
 ) -> Dict[str, Any]:
     """
     Query ClickHouse for a single lookup.
@@ -34,19 +37,34 @@ async def lookup(
         clickhouse_key_id: ClickHouse API key ID
         clickhouse_key_secret: ClickHouse API key secret
         limit: Maximum number of results to return (default 10, max 100)
+        size_weight: Bias toward larger companies (0.0-0.3, default 0.1)
+            - 0.0       = pure similarity search (no size bias)
+            - 0.0 - 0.1 = light size bias
+            - 0.1 - 0.2 = pronounced size bias
+            - 0.2 - 0.3 = heavy size bias
     
     Returns:
-        Dict with 'columns' and 'rows' (limited to `limit` rows)
+        Dict with 'columns' [comp_id, comp_slug, comp_name, comp_web, dist] and 'rows'
     """
     if not query:
         return {'columns': [], 'rows': []}
 
     async with httpx.AsyncClient() as client:
-        response = await client.get(
+        response = await client.post(
             f'https://queries.clickhouse.cloud/run/{LOOKUP_ENDPOINT}',
-            params={'format': 'JSONCompact', 'param_query': query},
-            headers={'Content-Type': 'application/json'},
-            auth=(clickhouse_key_id, clickhouse_key_secret)
+            params={'format': 'JSONCompact'},
+            headers={
+                'Content-Type': 'application/json',
+                'x-clickhouse-endpoint-version': '2',
+            },
+            auth=(clickhouse_key_id, clickhouse_key_secret),
+            json={
+                'queryVariables': {
+                    'query': query,
+                    'max_log_hc': 6.0,
+                    'size_weight': size_weight,
+                }
+            }
         )
         
     if response.status_code == 200:
@@ -65,6 +83,7 @@ async def lookup_many(
     clickhouse_key_id: str,
     clickhouse_key_secret: str,
     limit: int = 10,
+    size_weight: float = 0.1,
     dedupe: bool = True
 ) -> List[Dict[str, Any]]:
     """
@@ -75,16 +94,19 @@ async def lookup_many(
         clickhouse_key_id: ClickHouse API key ID
         clickhouse_key_secret: ClickHouse API key secret
         limit: Maximum number of results per query (default 10, max 100)
+        size_weight: Bias toward larger companies (0.0-0.3, default 0.1)
         dedupe: Remove duplicate company IDs across results (default True)
     
     Returns:
-        List of dicts with 'query' and 'result' for each input (deduplicated by comp_id)
+        List of dicts with 'query' and 'result' for each input.
+        Each result has 'columns' [comp_id, comp_slug, comp_name, comp_web, dist] and 'rows'.
+        Results are deduplicated by comp_id across all queries.
     """
     if not queries:
         return []
     
     tasks = [
-        lookup(q, clickhouse_key_id, clickhouse_key_secret, limit) 
+        lookup(q, clickhouse_key_id, clickhouse_key_secret, limit, size_weight) 
         for q in queries
     ]
     results = await asyncio.gather(*tasks)
@@ -110,4 +132,3 @@ async def lookup_many(
         return deduped_results
     
     return [{'query': q, 'result': r} for q, r in zip(queries, results)]
-

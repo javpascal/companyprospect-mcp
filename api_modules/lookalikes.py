@@ -2,6 +2,8 @@
 CompanyProspect Lookalikes Module
 =================================
 Functions for finding similar companies using embeddings.
+
+Returns: comp_id, comp_slug, comp_name, comp_web, dist
 """
 
 import httpx

@@ -188,19 +188,20 @@ class handler(BaseHTTPRequestHandler):
                     "tools": [
                         {
                             "name": "lookup",
-                            "description": "Quick company typeahead - returns autocompleted companies ranked by relevance to the search query",
+                            "description": "Quick company typeahead - returns autocompleted companies ranked by relevance. Returns: comp_id, comp_slug, comp_name, comp_web, dist",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "query": {"type": "string", "description": "Company name or search term"},
-                                    "limit": {"type": "integer", "description": "Maximum results to return (default 10, max 100)"}
+                                    "limit": {"type": "integer", "description": "Maximum results to return (default 10, max 100)"},
+                                    "size_weight": {"type": "number", "description": "Bias toward larger companies (0.0-0.3, default 0.1). 0.0 = pure similarity, 0.1 = light bias, 0.2 = pronounced, 0.3 = heavy"}
                                 },
                                 "required": ["query"]
                             }
                         },
                         {
                             "name": "lookup_many",
-                            "description": "Async company typeahead for multiple search terms - returns autocompleted companies per search term, deduplicated by company ID",
+                            "description": "Async company typeahead for multiple search terms - returns autocompleted companies per search term, deduplicated by company ID. Returns: comp_id, comp_slug, comp_name, comp_web, dist",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -209,7 +210,8 @@ class handler(BaseHTTPRequestHandler):
                                         "description": "List of search terms/keywords",
                                         "items": {"type": "string"}
                                     },
-                                    "limit": {"type": "integer", "description": "Maximum results per query (default 10, max 100)"}
+                                    "limit": {"type": "integer", "description": "Maximum results per query (default 10, max 100)"},
+                                    "size_weight": {"type": "number", "description": "Bias toward larger companies (0.0-0.3, default 0.1)"}
                                 },
                                 "required": ["queries"]
                             }
@@ -231,14 +233,14 @@ class handler(BaseHTTPRequestHandler):
                         },
                         {
                             "name": "lookalike_from_term",
-                            "description": "Find similar/lookalike companies based on a search term or description. Uses semantic embeddings to find companies with similar characteristics.",
+                            "description": "Find similar/lookalike companies based on a search term or description using semantic embeddings. Returns: comp_id, comp_slug, comp_name, comp_web, dist",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "query": {"type": "string", "description": "Search term or description to find similar companies (e.g., 'enterprise SaaS', 'fintech payments')"},
                                     "size_weight": {
                                         "type": "number",
-                                        "description": "Bias toward larger companies (0.0-0.3, default 0.20). 0.0 = pure similarity (no size bias), 0.0-0.1 = light bias, 0.1-0.2 = pronounced bias, 0.2-0.3 = heavy bias"
+                                        "description": "Bias toward larger companies (0.0-0.3, default 0.20). 0.0 = pure similarity, 0.1 = light bias, 0.2 = pronounced, 0.3 = heavy"
                                     },
                                     "limit": {"type": "integer", "description": "Maximum results to return (default 100, max 1000)"}
                                 },
@@ -247,7 +249,7 @@ class handler(BaseHTTPRequestHandler):
                         },
                         {
                             "name": "lookalike_from_ids",
-                            "description": "Find similar/lookalike companies based on a list of known company IDs. Returns companies with similar profiles to the input companies. Supports optional filters for headcount and country.",
+                            "description": "Find similar/lookalike companies based on a list of known company IDs. Supports optional filters for headcount and country. Returns: comp_id, comp_slug, comp_name, comp_web, dist",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -267,7 +269,7 @@ class handler(BaseHTTPRequestHandler):
                                     },
                                     "size_weight": {
                                         "type": "number",
-                                        "description": "Bias toward larger companies (0.0-0.3, default 0.20). 0.0 = pure similarity (no size bias), 0.0-0.1 = light bias, 0.1-0.2 = pronounced bias, 0.2-0.3 = heavy bias"
+                                        "description": "Bias toward larger companies (0.0-0.3, default 0.20). 0.0 = pure similarity, 0.1 = light bias, 0.2 = pronounced, 0.3 = heavy"
                                     },
                                     "limit": {"type": "integer", "description": "Maximum results to return (default 100, max 1000)"}
                                 },
@@ -304,7 +306,8 @@ class handler(BaseHTTPRequestHandler):
             if tool_name == "lookup":
                 query = args.get("query", "")
                 limit = args.get("limit", 10)
-                result = call_companyprospect_api_get("/v01/lookup", {"query": query.strip(), "limit": limit}, api_key)
+                size_weight = args.get("size_weight", 0.1)
+                result = call_companyprospect_api_get("/v01/lookup", {"query": query.strip(), "limit": limit, "size_weight": size_weight}, api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -315,7 +318,8 @@ class handler(BaseHTTPRequestHandler):
             elif tool_name == "lookup_many":
                 queries = args.get("queries", [])
                 limit = args.get("limit", 10)
-                result = call_companyprospect_api_post("/v01/lookup_many", {"queries": queries, "limit": limit}, api_key)
+                size_weight = args.get("size_weight", 0.1)
+                result = call_companyprospect_api_post("/v01/lookup_many", {"queries": queries, "limit": limit, "size_weight": size_weight}, api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,

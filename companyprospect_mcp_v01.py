@@ -197,13 +197,13 @@ def fastapi_app():
     # HELPER WRAPPERS (use api_modules with credentials)
     # -------------------------------------------------------------------------
     
-    async def lookup(query: str, limit: int = 10) -> Dict[str, Any]:
+    async def lookup(query: str, limit: int = 10, size_weight: float = 0.1) -> Dict[str, Any]:
         """Wrapper for lookups.lookup with credentials."""
-        return await lookups.lookup(query, CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET, limit)
+        return await lookups.lookup(query, CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET, limit, size_weight)
     
-    async def lookup_many(queries: List[str], limit: int = 10) -> List[Dict[str, Any]]:
+    async def lookup_many(queries: List[str], limit: int = 10, size_weight: float = 0.1) -> List[Dict[str, Any]]:
         """Wrapper for lookups.lookup_many with credentials."""
-        return await lookups.lookup_many(queries, CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET, limit)
+        return await lookups.lookup_many(queries, CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET, limit, size_weight)
     
     async def lookalike_from_ids(
         company_ids: List[int],
@@ -230,31 +230,39 @@ def fastapi_app():
     # -------------------------------------------------------------------------
 
     @web_app.get("/v01/lookup")
-    async def api_lookup(query: str, limit: int = 10):
+    async def api_lookup(query: str, limit: int = 10, size_weight: float = 0.1):
         """
-        Single query lookup.
+        Single query lookup - find companies by name.
         
         Query params:
-            query: Search term
-            limit: Maximum results (default 10)
+            query: Search term (company name)
+            limit: Maximum results (default 10, max 100)
+            size_weight: Bias toward larger companies (0.0-0.3, default 0.1)
+        
+        Returns columns: comp_id, comp_slug, comp_name, comp_web, dist
         """
-        return JSONResponse(content=await lookup(query, limit))
+        return JSONResponse(content=await lookup(query, limit, size_weight))
 
 
     @web_app.post("/v01/lookup_many")
     async def api_lookup_many(payload: Dict[str, Any]):
         """
-        Batch lookup for multiple queries.
+        Batch lookup for multiple queries - find companies by name.
+        Results are deduplicated by comp_id across all queries.
         
         Request body: 
         {
             "queries": ["query1", "query2", ...],
-            "limit": 10  // optional, default 10
+            "limit": 10,           // optional, default 10, max 100
+            "size_weight": 0.1     // optional, default 0.1
         }
+        
+        Returns columns: comp_id, comp_slug, comp_name, comp_web, dist
         """
         queries = payload.get('queries', [])
         limit = payload.get('limit', 10)
-        return JSONResponse(content=await lookup_many(queries, limit))
+        size_weight = payload.get('size_weight', 0.1)
+        return JSONResponse(content=await lookup_many(queries, limit, size_weight))
 
     # -------------------------------------------------------------------------
     # ENDPOINTS: Embeddings
@@ -279,14 +287,16 @@ def fastapi_app():
     @web_app.post("/v01/lookalike_from_term")
     async def api_lookalike_from_term(payload: Dict[str, Any]):
         """
-        Generate lookalikes for a single term.
+        Generate lookalikes for a single term using semantic search.
         
         Request body:
         {
             "query": "term",                   // required: search term
             "size_weight": 0.20,               // optional: size weight (default 0.20, ranges 0.0 - 0.3)
-            "limit": 100                       // optional: max results (default 100)
+            "limit": 100                       // optional: max results (default 100, max 1000)
         }
+        
+        Returns columns: comp_id, comp_slug, comp_name, comp_web, dist
         
         size_weight controls the bias toward larger companies in the results:
           - 0.0       = pure similarity search (no size bias)
@@ -312,8 +322,10 @@ def fastapi_app():
             "filter_hc": 10,                     // optional: minimum headcount
             "filter_cc2": ["es", "fr", "de"],    // optional: country codes
             "size_weight": 0.15,                 // optional: size weight (default 0.15, ranges 0.0 - 0.3)
-            "limit": 100                         // optional: max results (default 100)
+            "limit": 100                         // optional: max results (default 100, max 1000)
         }
+        
+        Returns columns: comp_id, comp_slug, comp_name, comp_web, dist
         
         size_weight controls the bias toward larger companies in the results:
           - 0.0       = pure similarity search (no size bias)
