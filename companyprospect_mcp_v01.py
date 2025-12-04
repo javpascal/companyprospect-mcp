@@ -226,6 +226,22 @@ def fastapi_app():
         )
 
     # -------------------------------------------------------------------------
+    # ENDPOINTS: Health / Wake-up
+    # -------------------------------------------------------------------------
+
+    @web_app.get("/ping")
+    async def api_ping():
+        """
+        Health check / wake-up endpoint.
+        
+        Call this first to ensure the server is active before making other API calls.
+        The server may be sleeping to save costs and needs ~10-30 seconds to wake up.
+        
+        Returns: {"status": "ok", "message": "Server is active"}
+        """
+        return JSONResponse(content={"status": "ok", "message": "Server is active"})
+
+    # -------------------------------------------------------------------------
     # ENDPOINTS: Lookup
     # -------------------------------------------------------------------------
 

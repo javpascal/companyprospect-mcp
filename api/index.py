@@ -187,8 +187,17 @@ class handler(BaseHTTPRequestHandler):
                 "result": {
                     "tools": [
                         {
+                            "name": "ping",
+                            "description": "IMPORTANT: Call this FIRST to wake up the server before using other tools. The server may be sleeping to save costs and needs ~10-30 seconds to wake up. Returns {status: 'ok'} when ready.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {},
+                                "required": []
+                            }
+                        },
+                        {
                             "name": "lookup",
-                            "description": "Quick company typeahead - returns autocompleted companies ranked by relevance. Returns: comp_id, comp_slug, comp_name, comp_web, dist",
+                            "description": "Quick company typeahead - returns autocompleted companies ranked by relevance. Returns: comp_id, comp_slug, comp_name, comp_web, dist. NOTE: Call 'ping' first if server may be sleeping.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -303,7 +312,16 @@ class handler(BaseHTTPRequestHandler):
             
             print(f"[DEBUG] Tool call: {tool_name}, API key present: {bool(api_key)}", file=sys.stderr)
             
-            if tool_name == "lookup":
+            if tool_name == "ping":
+                result = call_companyprospect_api_get("/ping", {}, api_key)
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
+                    }
+                }
+            elif tool_name == "lookup":
                 query = args.get("query", "")
                 limit = args.get("limit", 10)
                 size_weight = args.get("size_weight", 0.1)
