@@ -151,7 +151,7 @@ class handler(BaseHTTPRequestHandler):
         
         # Fall back to environment variable
         if not api_key:
-            api_key = 'FALLBACK_API_KEY'
+            api_key = os.environ.get('FALLBACK_API_KEY')
             if api_key:
                 print(f"[DEBUG] POST: Using fallback API key from environment", file=sys.stderr)
             else:
