@@ -181,7 +181,7 @@ class GPUEmbedder:
 @asgi_app(custom_domains=["api.companyprospect.com"])
 def fastapi_app():
     """Main FastAPI application with all endpoints."""
-    from api_modules import reports, query_parser, lookups, lookalikes
+    from api_modules import reports, query_parser, lookups, lookalikes, titles
     
     # Initialize services
     embedder = GPUEmbedder()
@@ -223,6 +223,20 @@ def fastapi_app():
         return await lookalikes.lookalike_from_term(
             query, CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET,
             embedder.embed_inputs.remote, size_weight, limit
+        )
+    
+    async def lookup_title(query: str, limit: int = 10) -> Dict[str, Any]:
+        """Wrapper for titles.lookup_title with credentials."""
+        return await titles.lookup_title(
+            query, CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET,
+            embedder.embed_inputs.remote, limit
+        )
+    
+    async def lookup_title_many(queries: List[str], limit: int = 10) -> List[Dict[str, Any]]:
+        """Wrapper for titles.lookup_title_many with credentials."""
+        return await titles.lookup_title_many(
+            queries, CLICKHOUSE_KEY_ID, CLICKHOUSE_KEY_SECRET,
+            embedder.embed_inputs.remote, limit
         )
 
     # -------------------------------------------------------------------------
@@ -279,6 +293,39 @@ def fastapi_app():
         limit = payload.get('limit', 10)
         size_weight = payload.get('size_weight', 0.1)
         return JSONResponse(content=await lookup_many(queries, limit, size_weight))
+
+
+    @web_app.get("/v01/lookup_title")
+    async def api_lookup_title(query: str, limit: int = 10):
+        """
+        Search job titles using semantic similarity.
+        
+        Query params:
+            query: Search term for job title (e.g., 'founder', 'data scientist', 'sales manager')
+            limit: Maximum results (default 10, max 100)
+        
+        Returns columns: title_id, title_name, supertitle_id, function_id, function_name, dist
+        """
+        return JSONResponse(content=await lookup_title(query, limit))
+
+
+    @web_app.post("/v01/lookup_title_many")
+    async def api_lookup_title_many(payload: Dict[str, Any]):
+        """
+        Batch search job titles using semantic similarity.
+        Results are deduplicated by title_id across all queries.
+        
+        Request body: 
+        {
+            "queries": ["founder", "data scientist", "sales"],
+            "limit": 10  // optional, default 10, max 100
+        }
+        
+        Returns columns: title_id, title_name, supertitle_id, function_id, function_name, dist
+        """
+        queries = payload.get('queries', [])
+        limit = payload.get('limit', 10)
+        return JSONResponse(content=await lookup_title_many(queries, limit))
 
     # -------------------------------------------------------------------------
     # ENDPOINTS: Embeddings

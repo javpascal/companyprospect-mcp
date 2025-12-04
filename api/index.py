@@ -241,6 +241,34 @@ class handler(BaseHTTPRequestHandler):
                             }
                         },
                         {
+                            "name": "lookup_title",
+                            "description": "Search job titles using semantic similarity. Finds matching titles from taxonomy based on search term. Returns: title_id, title_name, supertitle_id, function_id, function_name, dist",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {"type": "string", "description": "Search term for job title (e.g., 'founder', 'data scientist', 'sales manager', 'ceo')"},
+                                    "limit": {"type": "integer", "description": "Maximum results to return (default 10, max 100)"}
+                                },
+                                "required": ["query"]
+                            }
+                        },
+                        {
+                            "name": "lookup_title_many",
+                            "description": "Batch search job titles using semantic similarity. Searches multiple titles concurrently, deduplicated by title_id. Returns: title_id, title_name, supertitle_id, function_id, function_name, dist",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "queries": {
+                                        "type": "array",
+                                        "description": "List of search terms for job titles",
+                                        "items": {"type": "string"}
+                                    },
+                                    "limit": {"type": "integer", "description": "Maximum results per query (default 10, max 100)"}
+                                },
+                                "required": ["queries"]
+                            }
+                        },
+                        {
                             "name": "lookalike_from_term",
                             "description": "Find similar/lookalike companies based on a search term or description using semantic embeddings. Returns: comp_id, comp_slug, comp_name, comp_web, dist",
                             "inputSchema": {
@@ -350,6 +378,28 @@ class handler(BaseHTTPRequestHandler):
                 # API expects comma-separated string for query param
                 query_string = ",".join(inputs) if inputs else ""
                 result = call_companyprospect_api_get("/v01/embed_many", {"query": query_string}, api_key)
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
+                    }
+                }
+            elif tool_name == "lookup_title":
+                query = args.get("query", "")
+                limit = args.get("limit", 10)
+                result = call_companyprospect_api_get("/v01/lookup_title", {"query": query.strip(), "limit": limit}, api_key)
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
+                    }
+                }
+            elif tool_name == "lookup_title_many":
+                queries = args.get("queries", [])
+                limit = args.get("limit", 10)
+                result = call_companyprospect_api_post("/v01/lookup_title_many", {"queries": queries, "limit": limit}, api_key)
                 response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
