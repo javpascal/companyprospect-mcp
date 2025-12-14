@@ -6,6 +6,7 @@ Functions for finding similar companies using embeddings.
 Returns: comp_id, comp_slug, comp_name, comp_web, dist
 """
 
+import asyncio
 import httpx
 from typing import Dict, Any, List, Optional, Callable
 
@@ -63,7 +64,7 @@ async def lookalike_from_ids(
         'limit': min(limit, 1000),
     }
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
             f'https://queries.clickhouse.cloud/run/{LOOKALIKE_FROM_IDS_ENDPOINT}',
             params={'format': 'JSONCompact'},
@@ -121,10 +122,27 @@ async def lookalike_from_term(
     if not query:
         return {'columns': [], 'rows': []}
 
-    # Get embedding as list for queryVariables
-    query_emb = embed_fn([query])[0].tolist()
+    # Get embedding with timeout - run in thread pool to avoid blocking async loop
+    loop = asyncio.get_event_loop()
+    try:
+        query_emb = await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: embed_fn([query])[0].tolist()),
+            timeout=120.0  # 2 minute timeout for embedding (cold start can be slow)
+        )
+    except asyncio.TimeoutError:
+        return {
+            'query': query,
+            'error': 'Embedding timeout',
+            'detail': 'Embedding generation timed out after 120 seconds'
+        }
+    except Exception as e:
+        return {
+            'query': query,
+            'error': 'Embedding failed',
+            'detail': str(e)[:500]
+        }
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=90.0) as client:
         response = await client.post(
             f'https://queries.clickhouse.cloud/run/{LOOKALIKE_FROM_TERM_ENDPOINT}',
             params={'format': 'JSONCompact'},
@@ -152,5 +170,9 @@ async def lookalike_from_term(
             'rows': rows[:capped_limit]
         }
     
-    return {'query': query, 'error': f'Status {response.status_code}'}
+    return {
+        'query': query,
+        'error': f'Status {response.status_code}',
+        'detail': response.text[:500] if response.text else 'No response body'
+    }
 

@@ -45,10 +45,27 @@ async def lookup_title(
     if not query:
         return {'columns': [], 'rows': []}
 
-    # Get embedding as list for queryVariables
-    query_emb = embed_fn([query])[0].tolist()
+    # Get embedding with timeout - run in thread pool to avoid blocking async loop
+    loop = asyncio.get_event_loop()
+    try:
+        query_emb = await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: embed_fn([query])[0].tolist()),
+            timeout=120.0  # 2 minute timeout for embedding (cold start can be slow)
+        )
+    except asyncio.TimeoutError:
+        return {
+            'query': query,
+            'error': 'Embedding timeout',
+            'detail': 'Embedding generation timed out after 120 seconds'
+        }
+    except Exception as e:
+        return {
+            'query': query,
+            'error': 'Embedding failed',
+            'detail': str(e)[:500]
+        }
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=90.0) as client:
         response = await client.post(
             f'https://queries.clickhouse.cloud/run/{TITLE_LOOKUP_ENDPOINT}',
             params={'format': 'JSONCompact'},

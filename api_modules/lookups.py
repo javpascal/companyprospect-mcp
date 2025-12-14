@@ -49,7 +49,7 @@ async def lookup(
     if not query:
         return {'columns': [], 'rows': []}
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             f'https://queries.clickhouse.cloud/run/{LOOKUP_ENDPOINT}',
             params={'format': 'JSONCompact'},

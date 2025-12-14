@@ -463,30 +463,97 @@ def fastapi_app():
         
         return JSONResponse(content=result)
 
+    @web_app.post("/v01/presign")
+    async def api_presign(payload: Dict[str, Any]):
+        """
+        Generate a presigned URL for an existing S3 file.
+        
+        Request body:
+        {
+            "key": "reports/published/file.csv",  // S3 key (without bucket)
+            "expires_days": 7                      // optional, default 7
+        }
+        """
+        import boto3
+        
+        key = payload.get('key', '')
+        expires_days = payload.get('expires_days', 7)
+        
+        if not key:
+            return JSONResponse(content={'error': 'key is required'}, status_code=400)
+        
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        
+        presigned_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': 'companyprospect', 'Key': key},
+            ExpiresIn=expires_days * 24 * 60 * 60
+        )
+        
+        return JSONResponse(content={
+            'url': presigned_url,
+            'key': key,
+            'expires_days': expires_days
+        })
+
     # -------------------------------------------------------------------------
     # ENDPOINTS: Query Parser
     # -------------------------------------------------------------------------
 
+    @web_app.get("/v01/parse_query_debug")
+    async def api_parse_query_debug():
+        """Debug endpoint to check query parser."""
+        try:
+            # Test import
+            from api_modules import query_parser
+            has_openai = OPENAI_API_KEY != 'NOT_FOUND'
+            return JSONResponse(content={
+                'status': 'ok',
+                'has_openai_key': has_openai,
+                'openai_key_prefix': OPENAI_API_KEY[:10] + '...' if has_openai else 'NOT_FOUND',
+                'parser_loaded': hasattr(query_parser, 'parse_query')
+            })
+        except Exception as e:
+            return JSONResponse(content={'error': str(e)}, status_code=500)
+
     @web_app.post("/v01/parse_query")
     async def api_parse_query(payload: Dict[str, Any]):
         """
-        Parse a natural language query into structured JSON for company searches.
+        Parse a natural language query into structured JSON for company/lead searches.
         
         Request body:
         {
-            "query": "startups en online payments en españa con >10 empleados"
+            "query": "data scientists at Meta with fintech experience and python skills"
         }
         
         Returns:
         {
-            "industry_summary": "Online payment fintech service providers",
-            "competitor_parsed_list": [10145, 9033],           // Explicit mentions resolved to IDs
-            "competitor_suggested_list": [10667, 4006],        // LLM-suggested companies
-            "industry_lookalikes_list": [12345, 67890, ...],   // Semantic search on industry_summary
-            "filt_lead_type": ["company"],
-            "filt_comp_cc2_list": ["es"],
-            "filt_comp_hc": [10, -1]
+            "industry_summary": "Social media and technology companies",
+            "competitor_parsed_list": [10145, 9033],           // Lookalike company mentions → IDs
+            "competitor_suggested_list": [10667, 4006],        // LLM-suggested lookalike companies
+            "explicit_comp_id_list_curr": [10667],             // CURRENT employees at these companies
+            "explicit_comp_id_list_past": [],                  // FORMER employees (ex-company)
+            "explicit_comp_id_list_any": [],                   // Any-time employees (current OR past)
+            "industry_lookalikes_list": [12345, 67890, ...],   // Semantic search on industry
+            "profile_industry_experience": "Financial technology and digital payments", // Past experience filter
+            "headline_skills_explicit": ["python"],             // Functional skills (not title/industry)
+            "headline_skills_explicit_expanded": ["python", "programming", "pandas"], // Expanded skills
+            "filt_lead_type": ["employee"],
+            "filt_comp_loc_cc2": ["es"],
+            "filt_comp_loc_city": ["madrid", "barcelona"],       // City variants for exact match
+            "filt_comp_loc_region": ["cataluña", "catalunya"],   // Region variants
+            "filt_comp_hc": [10, -1],
+            "filt_emp_title": ["Data Scientist", "Data Analyst"],
+            "filt_emp_title_ids": [25190, 340],                // Taxonomy IDs (embedding match)
+            "filt_emp_title_keywords": ["data scientist", "data analyst"]  // Full titles for ILIKE
         }
+        
+        Field descriptions:
+        - explicit_comp_id_list_*: Companies where user wants employees (curr/past/any)
+        - competitor_*: Companies for finding SIMILAR companies (lookalikes)
+        - profile_industry_experience: Industry of PAST companies (not skills)
+        - headline_skills_explicit: Functional skills NOT inferable from title/industry
+        - headline_skills_explicit_expanded: Expanded related skills for better recall
         """
         query = payload.get('query', '')
         
@@ -497,23 +564,35 @@ def fastapi_app():
             )
         
         # Call the query parser without lookup (returns names instead of IDs)
-        result = query_parser.parse_query(
-            query=query,
-            openai_api_key=OPENAI_API_KEY,
-            lookup_many_fn=None  # We'll do lookups async below
-        )
+        try:
+            result = query_parser.parse_query(
+                query=query,
+                openai_api_key=OPENAI_API_KEY,
+                lookup_many_fn=None  # We'll do lookups async below
+            )
+        except Exception as e:
+            return JSONResponse(
+                content={'error': f'parse_query failed: {str(e)}', 'openai_key_found': OPENAI_API_KEY != 'NOT_FOUND'},
+                status_code=500
+            )
         
         # Check for errors
         if 'error' in result:
             return JSONResponse(content=result)
         
-        # Resolve competitor names to IDs using async lookup_many with validation
+        # Resolve company names to IDs using async lookup_many with validation
         competitor_names = result.pop('competitor_names', [])
         suggested_names = result.pop('suggested_companies', [])
+        explicit_comp_names_curr = result.pop('explicit_comp_names_curr', [])
+        explicit_comp_names_past = result.pop('explicit_comp_names_past', [])
+        explicit_comp_names_any = result.pop('explicit_comp_names_any', [])
         industry_context = result.get('industry_summary', '')
         
         result['competitor_parsed_list'] = []
         result['competitor_suggested_list'] = []
+        result['explicit_comp_id_list_curr'] = []
+        result['explicit_comp_id_list_past'] = []
+        result['explicit_comp_id_list_any'] = []
         
         # Helper to validate and select best match from multiple candidates
         def validate_company(search_term: str, rows: list, columns: list) -> int | None:
@@ -556,35 +635,91 @@ Return JSON: {{"comp_id": <best matching id or null>}}"""
             except:
                 return int(rows[0][0])  # Fallback to first
         
-        if competitor_names:
-            lookup_results = await lookup_many(competitor_names)
-            for item in lookup_results:
-                res = item.get('result', {})
-                rows = res.get('rows', [])
-                columns = res.get('columns', [])
-                comp_id = validate_company(item.get('query', ''), rows, columns)
-                if comp_id:
-                    result['competitor_parsed_list'].append(comp_id)
-        
-        if suggested_names:
-            lookup_results = await lookup_many(suggested_names)
-            for item in lookup_results:
-                res = item.get('result', {})
-                rows = res.get('rows', [])
-                columns = res.get('columns', [])
-                comp_id = validate_company(item.get('query', ''), rows, columns)
-                if comp_id:
-                    result['competitor_suggested_list'].append(comp_id)
-        
-        # Get industry lookalikes using semantic search on industry_summary
-        result['industry_lookalikes_list'] = []
-        if industry_context:
-            lookalike_result = await lookalike_from_term(industry_context, size_weight=0.15, limit=20)
-            rows = lookalike_result.get('rows', [])
-            if rows:
-                result['industry_lookalikes_list'] = [int(row[0]) for row in rows]
-        
-        return JSONResponse(content=result)
+        try:
+            if competitor_names:
+                lookup_results = await lookup_many(competitor_names)
+                for item in lookup_results:
+                    res = item.get('result', {})
+                    rows = res.get('rows', [])
+                    columns = res.get('columns', [])
+                    comp_id = validate_company(item.get('query', ''), rows, columns)
+                    if comp_id:
+                        result['competitor_parsed_list'].append(comp_id)
+            
+            if suggested_names:
+                lookup_results = await lookup_many(suggested_names)
+                for item in lookup_results:
+                    res = item.get('result', {})
+                    rows = res.get('rows', [])
+                    columns = res.get('columns', [])
+                    comp_id = validate_company(item.get('query', ''), rows, columns)
+                    if comp_id:
+                        result['competitor_suggested_list'].append(comp_id)
+            
+            # Resolve explicit company names (current, past, any)
+            for suffix, names in [
+                ('curr', explicit_comp_names_curr),
+                ('past', explicit_comp_names_past),
+                ('any', explicit_comp_names_any)
+            ]:
+                if names:
+                    lookup_results = await lookup_many(names)
+                    for item in lookup_results:
+                        res = item.get('result', {})
+                        rows = res.get('rows', [])
+                        columns = res.get('columns', [])
+                        comp_id = validate_company(item.get('query', ''), rows, columns)
+                        if comp_id:
+                            result[f'explicit_comp_id_list_{suffix}'].append(comp_id)
+            
+            # Get industry lookalikes using semantic search on industry_summary
+            result['industry_lookalikes_list'] = []
+            if industry_context:
+                lookalike_result = await lookalike_from_term(industry_context, size_weight=0.15, limit=20)
+                rows = lookalike_result.get('rows', [])
+                if rows:
+                    result['industry_lookalikes_list'] = [int(row[0]) for row in rows]
+            
+            # Resolve job titles to IDs and keywords (always when titles present)
+            emp_titles = result.get('filt_emp_title', [])
+            
+            if emp_titles:
+                title_lookup_results = await lookup_title_many(emp_titles, limit=3)
+                title_ids = []
+                title_keywords = set()  # Full valid title names, not individual words
+                seen_ids = set()
+                
+                for item in title_lookup_results:
+                    query_term = item.get('query', '').lower().strip()
+                    res = item.get('result', {})
+                    rows = res.get('rows', [])
+                    
+                    # Add original search term as keyword (always)
+                    if query_term:
+                        title_keywords.add(query_term)
+                    
+                    for row in rows:
+                        title_id = row[0]
+                        title_name = row[1] if len(row) > 1 else ''
+                        
+                        if title_id not in seen_ids:
+                            seen_ids.add(title_id)
+                            title_ids.append(int(title_id))
+                        
+                        # Add FULL title name as keyword (must be a valid title itself)
+                        if title_name:
+                            title_keywords.add(title_name.lower())
+                
+                result['filt_emp_title_ids'] = title_ids
+                result['filt_emp_title_keywords'] = list(title_keywords)
+            
+            return JSONResponse(content=result)
+        except Exception as e:
+            import traceback
+            return JSONResponse(
+                content={'error': f'Post-processing failed: {str(e)}', 'traceback': traceback.format_exc()},
+                status_code=500
+            )
 
     # -------------------------------------------------------------------------
 
